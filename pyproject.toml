@@ -28,3 +28,5 @@ packages = ["src/nccn_watcher"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Exclude integration tests (they need live NCCN access + credentials)
+addopts = "--ignore=tests/integration_test.py"

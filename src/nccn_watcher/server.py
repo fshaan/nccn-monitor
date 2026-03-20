@@ -12,6 +12,7 @@ from .state import StateManager
 from .downloader import NCCNDownloader
 from .analyzer import extract_update_notes, build_summary_prompt
 from .health import HealthTracker
+from .guideline_names import search_guidelines, get_zh_name, GUIDELINE_ZH
 
 logging.basicConfig(
     level=logging.INFO,
@@ -205,10 +206,170 @@ async def list_guidelines() -> str:
             if g.category != current_cat:
                 current_cat = g.category
                 lines.append(f"\n## {current_cat}")
-            lines.append(f"- **{g.name}** — Version {g.version}")
+            zh = get_zh_name(g.name)
+            lines.append(f"- **{g.name}** ({zh}) — Version {g.version}")
         return "\n".join(lines)
     except ScrapeError as e:
         return f"Failed to fetch guidelines: {e}"
+
+
+@mcp.tool()
+async def find_guideline(query: str) -> str:
+    """Search NCCN guidelines by name in Chinese or English.
+
+    Supports fuzzy matching. Examples:
+    - "肺癌" → Non-Small Cell Lung Cancer, Small Cell Lung Cancer
+    - "GIST" → Gastrointestinal Stromal Tumors
+    - "lymphoma" → B-Cell Lymphomas, T-Cell Lymphomas, Hodgkin Lymphoma, ...
+
+    Args:
+        query: Search term in Chinese, English, or abbreviation.
+
+    Returns matching guidelines with Chinese names and whether they
+    are currently in the watch list.
+    """
+    results = search_guidelines(query)
+    watch_list = config.get("watch_list", [])
+    watch_set = {name.lower() for name in watch_list} if watch_list else set()
+
+    if not results:
+        return f"No guidelines found matching '{query}'. Try a different term."
+
+    lines = [f"# Search results for '{query}' ({len(results)} matches)\n"]
+    for en_name, zh_name, score in results[:15]:
+        watched = "✅ 已监控" if en_name.lower() in watch_set else ""
+        lines.append(f"- **{en_name}** ({zh_name}) {watched}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def update_watch_list(action: str, guidelines: str) -> str:
+    """Add or remove guidelines from the watch list.
+
+    Args:
+        action: "add", "remove", or "set" (replace entire list).
+        guidelines: Comma-separated guideline names (English or Chinese).
+                    Fuzzy matching is applied — exact names not required.
+
+    Examples:
+        action="add", guidelines="肺癌, 胃癌, GIST"
+        action="remove", guidelines="Breast Cancer"
+        action="set", guidelines="结肠癌, 直肠癌, 胃癌"
+    """
+    watch_list: list[str] = list(config.get("watch_list", []))
+
+    # Parse input and resolve names
+    queries = [q.strip() for q in guidelines.split(",") if q.strip()]
+    resolved: list[str] = []
+    not_found: list[str] = []
+
+    for query in queries:
+        matches = search_guidelines(query)
+        if matches and matches[0][2] >= 0.4:
+            resolved.append(matches[0][0])  # Best match English name
+        else:
+            not_found.append(query)
+
+    if action == "add":
+        for name in resolved:
+            if name not in watch_list:
+                watch_list.append(name)
+    elif action == "remove":
+        watch_list = [n for n in watch_list if n not in resolved]
+    elif action == "set":
+        watch_list = resolved
+    else:
+        return f"Unknown action '{action}'. Use 'add', 'remove', or 'set'."
+
+    # Save to config
+    config["watch_list"] = watch_list
+    _save_config(config)
+
+    # Build response
+    lines = [f"Watch list updated ({action}). Now monitoring {len(watch_list)} guidelines:\n"]
+    for name in watch_list:
+        zh = get_zh_name(name)
+        lines.append(f"- {name} ({zh})")
+
+    if not_found:
+        lines.append(f"\n⚠️ Could not resolve: {', '.join(not_found)}")
+        lines.append("Use find_guideline to search for the correct name.")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def browse_guidelines() -> str:
+    """Browse all NCCN guidelines organized by category with Chinese names.
+
+    Returns a categorized list of all 92 guidelines with:
+    - English name + Chinese name
+    - Whether currently in the watch list (✅)
+
+    Useful for discovering what guidelines are available before
+    using update_watch_list to configure monitoring.
+    """
+    watch_list = config.get("watch_list", [])
+    watch_set = {name.lower() for name in watch_list} if watch_list else set()
+
+    categories = {
+        "Cancer by Type": "肿瘤治疗（按类型）",
+        "Detection, Prevention & Risk Reduction": "筛查与预防",
+        "Supportive Care": "支持治疗",
+        "Specific Populations": "特殊人群",
+    }
+
+    lines = ["# NCCN 指南浏览\n"]
+
+    for cat_en, cat_zh in categories.items():
+        lines.append(f"\n## {cat_zh} ({cat_en})")
+        cat_guidelines = [
+            (en, info) for en, info in GUIDELINE_ZH.items()
+            # Match category by checking which guidelines belong to it
+        ]
+        # We need the actual category mapping, use scraper data
+        for en_name, info in GUIDELINE_ZH.items():
+            # Rough category mapping based on position in the dict
+            # (the dict is ordered by category in the source)
+            pass
+
+    # Simpler approach: just list all by category from the dict ordering
+    lines = ["# NCCN 指南浏览"]
+    lines.append(f"当前监控列表：{len(watch_list)} 条\n")
+
+    current_section = ""
+    sections = {
+        0: ("肿瘤治疗（按类型）", 69),
+        69: ("筛查与预防", 7),
+        76: ("支持治疗", 13),
+        89: ("特殊人群", 3),
+    }
+
+    all_items = list(GUIDELINE_ZH.items())
+    for start, (section_name, count) in sections.items():
+        lines.append(f"\n## {section_name}")
+        for i in range(start, min(start + count, len(all_items))):
+            en_name, info = all_items[i]
+            zh_name = info["zh"]
+            watched = " ✅" if en_name.lower() in watch_set else ""
+            lines.append(f"- {en_name} ({zh_name}){watched}")
+
+    return "\n".join(lines)
+
+
+def _save_config(cfg: dict) -> None:
+    """Save config back to config.yaml."""
+    for path in DEFAULT_CONFIG_PATHS:
+        if path.exists():
+            with open(path, "w") as f:
+                yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
+            logger.info("Config saved to %s", path)
+            return
+    # Create default location
+    default_path = DEFAULT_CONFIG_PATHS[0]
+    with open(default_path, "w") as f:
+        yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
+    logger.info("Config created at %s", default_path)
 
 
 # ── Entry point ──────────────────────────────────────────────────────
