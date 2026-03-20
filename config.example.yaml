@@ -1,4 +1,4 @@
-# NCCN Watcher Configuration
+# NCCN Monitor Configuration
 # Copy this file to config.yaml and fill in your settings.
 
 # NCCN account credentials (free registration at nccn.org)
@@ -33,7 +33,7 @@ analysis:
   language: "zh-CN"
 
 # State file location
-state_file: "~/.nccn-watcher/state.json"
+state_file: "~/.nccn-monitor/state.json"
 
 # PDF cache directory
-cache_dir: "~/.nccn-watcher/cache"
+cache_dir: "~/.nccn-monitor/cache"

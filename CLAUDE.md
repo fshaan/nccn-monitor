@@ -1,4 +1,4 @@
-# NCCN Watcher
+# NCCN Monitor
 
 NCCN 指南更新监控工具 — MCP Server for OpenClaw.
 
@@ -12,13 +12,13 @@ Config tools: `find_guideline`, `update_watch_list`, `browse_guidelines`
 
 ## Key Modules
 
-- `src/nccn_watcher/scraper.py` — Scrape all 4 NCCN category pages (92 guidelines)
-- `src/nccn_watcher/state.py` — JSON-based version state tracking
-- `src/nccn_watcher/downloader.py` — NCCN login + PDF download (adapted from gscfwid/NCCN_guidelines_MCP)
-- `src/nccn_watcher/analyzer.py` — PDF update notes extraction + AI summary prompt
-- `src/nccn_watcher/health.py` — Health check / silent failure detection
-- `src/nccn_watcher/guideline_names.py` — Chinese name mapping + fuzzy search for all 92 guidelines
-- `src/nccn_watcher/server.py` — MCP server entry point (6 tools)
+- `src/nccn_monitor/scraper.py` — Scrape all 4 NCCN category pages (92 guidelines)
+- `src/nccn_monitor/state.py` — JSON-based version state tracking
+- `src/nccn_monitor/downloader.py` — NCCN login + PDF download (adapted from gscfwid/NCCN_guidelines_MCP)
+- `src/nccn_monitor/analyzer.py` — PDF update notes extraction + AI summary prompt
+- `src/nccn_monitor/health.py` — Health check / silent failure detection
+- `src/nccn_monitor/guideline_names.py` — Chinese name mapping + fuzzy search for all 92 guidelines
+- `src/nccn_monitor/server.py` — MCP server entry point (6 tools)
 
 ## Testing
 

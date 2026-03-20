@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from nccn_watcher.scraper import (
+from nccn_monitor.scraper import (
     parse_category_page,
     parse_recently_published,
     ScrapeError,

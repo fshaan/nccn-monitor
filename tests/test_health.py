@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from nccn_watcher.health import HealthTracker
+from nccn_monitor.health import HealthTracker
 
 
 def test_starts_healthy(tmp_path: Path):

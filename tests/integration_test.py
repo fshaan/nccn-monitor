@@ -22,10 +22,10 @@ from pathlib import Path
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from nccn_watcher.scraper import fetch_all_guidelines, fetch_recently_published, ScrapeError
-from nccn_watcher.state import StateManager
-from nccn_watcher.downloader import NCCNDownloader
-from nccn_watcher.analyzer import extract_update_notes
+from nccn_monitor.scraper import fetch_all_guidelines, fetch_recently_published, ScrapeError
+from nccn_monitor.state import StateManager
+from nccn_monitor.downloader import NCCNDownloader
+from nccn_monitor.analyzer import extract_update_notes
 
 
 def header(msg: str) -> None:
@@ -108,7 +108,7 @@ async def test_state(guidelines):
         # Simulate a version change
         fake = list(guidelines)
         if fake:
-            from nccn_watcher.scraper import GuidelineInfo
+            from nccn_monitor.scraper import GuidelineInfo
             original = fake[0]
             fake[0] = GuidelineInfo(
                 name=original.name,
@@ -178,7 +178,7 @@ async def test_analyzer(pdf_path):
 
 
 async def main():
-    print("\n🔬 NCCN Watcher Integration Test")
+    print("\n🔬 NCCN Monitor Integration Test")
     print("Testing against live NCCN website...\n")
 
     # Use a shared temp dir so PDF persists across tests

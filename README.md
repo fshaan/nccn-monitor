@@ -1,10 +1,10 @@
-# NCCN Watcher
+# NCCN Monitor
 
 Monitor NCCN clinical guideline updates and get notified when new versions are published.
 
 NCCN (National Comprehensive Cancer Network) publishes clinical practice guidelines for 92 cancer types and supportive care topics. These guidelines are updated frequently, and keeping track of changes is important for oncologists, researchers, and pharmaceutical professionals.
 
-NCCN Watcher tracks version changes across all 92 NCCN professional guidelines, downloads updated PDFs, extracts update notes, and generates AI-powered change summaries — all accessible through the MCP protocol for integration with OpenClaw or any MCP-compatible AI assistant.
+NCCN Monitor tracks version changes across all 92 NCCN professional guidelines, downloads updated PDFs, extracts update notes, and generates AI-powered change summaries — all accessible through the MCP protocol for integration with OpenClaw or any MCP-compatible AI assistant.
 
 ## Features
 
@@ -27,8 +27,8 @@ NCCN Watcher tracks version changes across all 92 NCCN professional guidelines, 
 ### Install
 
 ```bash
-git clone https://github.com/fshaan/nccn-watcher.git
-cd nccn-watcher
+git clone https://github.com/fshaan/nccn-monitor.git
+cd nccn-monitor
 uv venv --python 3.13 .venv
 source .venv/bin/activate
 uv pip install -e ".[dev]"
@@ -51,7 +51,7 @@ export NCCN_PASSWORD="your_password"
 
 ```bash
 # Start the MCP server (stdio transport)
-python -m nccn_watcher.server
+python -m nccn_monitor.server
 
 # Run unit tests
 python -m pytest tests/ -v
@@ -78,10 +78,10 @@ Add this MCP server to your OpenClaw configuration:
 ```json
 {
   "mcpServers": {
-    "nccn-watcher": {
+    "nccn-monitor": {
       "command": "python",
-      "args": ["-m", "nccn_watcher.server"],
-      "cwd": "/path/to/nccn-watcher"
+      "args": ["-m", "nccn_monitor.server"],
+      "cwd": "/path/to/nccn-monitor"
     }
   }
 }
@@ -97,7 +97,7 @@ OpenClaw (cron + notifications)
     │ MCP Protocol (stdio)
     ▼
 ┌─────────────────────────────────────┐
-│      NCCN Watcher MCP Server        │
+│      NCCN Monitor MCP Server        │
 │                                     │
 │  scraper ──→ state ──→ notifier     │
 │     │                               │

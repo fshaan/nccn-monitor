@@ -3,8 +3,8 @@
 import json
 from pathlib import Path
 
-from nccn_watcher.scraper import GuidelineInfo
-from nccn_watcher.state import StateManager
+from nccn_monitor.scraper import GuidelineInfo
+from nccn_monitor.state import StateManager
 
 
 def make_guidelines(*items: tuple[str, str]) -> list[GuidelineInfo]:

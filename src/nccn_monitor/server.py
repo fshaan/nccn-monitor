@@ -1,4 +1,4 @@
-"""NCCN Watcher MCP Server — entry point for OpenClaw integration."""
+"""NCCN Monitor MCP Server — entry point for OpenClaw integration."""
 
 import os
 import logging
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATHS = [
     Path("config.yaml"),
-    Path.home() / ".nccn-watcher" / "config.yaml",
+    Path.home() / ".nccn-monitor" / "config.yaml",
 ]
 
 
@@ -48,17 +48,17 @@ def load_config() -> dict:
             "update_notes_pages": 5,
             "language": "zh-CN",
         },
-        "state_file": "~/.nccn-watcher/state.json",
-        "cache_dir": "~/.nccn-watcher/cache",
+        "state_file": "~/.nccn-monitor/state.json",
+        "cache_dir": "~/.nccn-monitor/cache",
     }
 
 
 # ── Initialize ───────────────────────────────────────────────────────
 
 config = load_config()
-mcp = FastMCP("nccn-watcher")
-state_mgr = StateManager(config.get("state_file", "~/.nccn-watcher/state.json"))
-health = HealthTracker("~/.nccn-watcher/health.json")
+mcp = FastMCP("nccn-monitor")
+state_mgr = StateManager(config.get("state_file", "~/.nccn-monitor/state.json"))
+health = HealthTracker("~/.nccn-monitor/health.json")
 
 nccn_user = config.get("nccn", {}).get("username") or os.getenv("NCCN_USERNAME", "")
 nccn_pass = config.get("nccn", {}).get("password") or os.getenv("NCCN_PASSWORD", "")
@@ -83,7 +83,7 @@ async def check_updates() -> str:
     message if no changes detected.
     """
     watch_list = config.get("watch_list", [])
-    cache_dir = config.get("cache_dir", "~/.nccn-watcher/cache")
+    cache_dir = config.get("cache_dir", "~/.nccn-monitor/cache")
     analysis_cfg = config.get("analysis", {})
     max_pages = analysis_cfg.get("update_notes_pages", 5)
     language = analysis_cfg.get("language", "zh-CN")
@@ -178,7 +178,7 @@ async def check_updates() -> str:
 
 @mcp.tool()
 async def get_status() -> str:
-    """Get the current status of the NCCN watcher.
+    """Get the current status of the NCCN monitor.
 
     Returns health status, last check time, and number of tracked guidelines.
     """
@@ -355,7 +355,7 @@ def _save_config(cfg: dict) -> None:
 # ── Entry point ──────────────────────────────────────────────────────
 
 def main():
-    logger.info("Starting NCCN Watcher MCP Server...")
+    logger.info("Starting NCCN Monitor MCP Server...")
     if nccn_user:
         logger.info("NCCN authentication configured for: %s", nccn_user)
     else:
