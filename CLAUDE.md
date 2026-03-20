@@ -4,8 +4,11 @@ NCCN 指南更新监控工具 — MCP Server for OpenClaw.
 
 ## Architecture
 
-Python MCP Server exposing 3 tools: `check_updates`, `get_status`, `list_guidelines`.
-OpenClaw calls these via MCP protocol (stdio transport).
+Python MCP Server exposing 6 tools via MCP protocol (stdio transport).
+OpenClaw or any MCP-compatible client can call these tools.
+
+Core tools: `check_updates`, `get_status`, `list_guidelines`
+Config tools: `find_guideline`, `update_watch_list`, `browse_guidelines`
 
 ## Key Modules
 
