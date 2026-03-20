@@ -9,7 +9,7 @@ from nccn_watcher.state import StateManager
 
 def make_guidelines(*items: tuple[str, str]) -> list[GuidelineInfo]:
     return [
-        GuidelineInfo(name=name, version=ver, pdf_url=f"https://nccn.org/{name}.pdf")
+        GuidelineInfo(name=name, version=ver, detail_url=f"https://nccn.org/detail/{name}")
         for name, ver in items
     ]
 

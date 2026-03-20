@@ -18,7 +18,7 @@ class VersionChange:
     name: str
     old_version: str
     new_version: str
-    pdf_url: str
+    detail_url: str
     category: str
 
 
@@ -89,7 +89,7 @@ class StateManager:
                             name=info.name,
                             old_version=old_ver,
                             new_version=info.version,
-                            pdf_url=info.pdf_url,
+                            detail_url=info.detail_url,
                             category=info.category,
                         )
                     )

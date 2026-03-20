@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 from mcp.server.fastmcp import FastMCP
 
-from .scraper import fetch_recently_published, ScrapeError
+from .scraper import fetch_all_guidelines, fetch_recently_published, ScrapeError
 from .state import StateManager
 from .downloader import NCCNDownloader
 from .analyzer import extract_update_notes, build_summary_prompt
@@ -72,8 +72,8 @@ async def check_updates() -> str:
     """Check NCCN guidelines for updates and return a change report.
 
     This is the main tool — designed to be called on a cron schedule.
-    It scrapes the NCCN Recently Published page, compares versions
-    against stored state, and for each update:
+    It scrapes ALL 4 NCCN category pages (92 guidelines total),
+    compares versions against stored state, and for each update:
     1. Downloads the new PDF (if NCCN credentials are configured)
     2. Extracts update notes from the first few pages
     3. Returns structured change data for AI summary generation
@@ -88,8 +88,8 @@ async def check_updates() -> str:
     language = analysis_cfg.get("language", "zh-CN")
 
     try:
-        # Step 1: Scrape current guideline versions
-        current = await fetch_recently_published()
+        # Step 1: Scrape ALL category pages for complete guideline list
+        current = await fetch_all_guidelines()
         health.record_success()
 
         # Step 2: Detect version changes
@@ -111,12 +111,12 @@ async def check_updates() -> str:
                 f"## {change.name}",
                 f"**Version**: {change.old_version} → {change.new_version}",
                 f"**Category**: {change.category}",
-                f"**PDF**: {change.pdf_url}",
+                f"**Detail**: {change.detail_url}",
             ]
 
             # Try PDF download + analysis if credentials available
             if analysis_cfg.get("enabled", True) and nccn_user:
-                pdf_path = await downloader.download_pdf(change.pdf_url, cache_dir)
+                pdf_path = await downloader.download_pdf(change.detail_url, cache_dir)
                 if pdf_path:
                     notes = extract_update_notes(pdf_path, max_pages)
                     if notes:
@@ -174,13 +174,14 @@ async def get_status() -> str:
 
 @mcp.tool()
 async def list_guidelines() -> str:
-    """Fetch and list all currently published NCCN guidelines with versions.
+    """Fetch and list ALL NCCN professional guidelines (92+) with versions.
 
-    Useful for discovering available guideline names to add to the watch list.
+    Scrapes all 4 category pages. Useful for discovering available
+    guideline names to add to the watch list.
     """
     try:
-        guidelines = await fetch_recently_published()
-        lines = [f"# NCCN Recently Published Guidelines ({len(guidelines)})\n"]
+        guidelines = await fetch_all_guidelines()
+        lines = [f"# NCCN Professional Guidelines ({len(guidelines)})\n"]
         current_cat = ""
         for g in guidelines:
             if g.category != current_cat:
