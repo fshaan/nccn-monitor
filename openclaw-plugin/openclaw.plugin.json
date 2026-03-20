@@ -1,0 +1,22 @@
+{
+  "id": "nccn-monitor",
+  "uiHints": {
+    "pythonPath": {
+      "label": "Python Path",
+      "help": "Path to the Python interpreter in the nccn-monitor virtualenv"
+    },
+    "projectDir": {
+      "label": "Project Directory",
+      "help": "Path to the nccn-monitor project root (where config.yaml lives)"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "pythonPath": { "type": "string" },
+      "projectDir": { "type": "string" }
+    }
+  }
+}

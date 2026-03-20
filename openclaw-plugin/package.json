@@ -1,0 +1,12 @@
+{
+  "name": "nccn-monitor",
+  "version": "0.1.0",
+  "description": "NCCN Guidelines update monitor — OpenClaw plugin",
+  "main": "index.ts",
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  },
+  "dependencies": {
+    "openclaw": "*"
+  }
+}
