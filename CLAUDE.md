@@ -9,7 +9,7 @@ OpenClaw calls these via MCP protocol (stdio transport).
 
 ## Key Modules
 
-- `src/nccn_watcher/scraper.py` — Scrape NCCN Recently Published page
+- `src/nccn_watcher/scraper.py` — Scrape all 4 NCCN category pages (92 guidelines)
 - `src/nccn_watcher/state.py` — JSON-based version state tracking
 - `src/nccn_watcher/downloader.py` — NCCN login + PDF download (adapted from gscfwid/NCCN_guidelines_MCP)
 - `src/nccn_watcher/analyzer.py` — PDF update notes extraction + AI summary prompt

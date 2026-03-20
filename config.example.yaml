@@ -8,7 +8,11 @@ nccn:
   password: ""
 
 # Cancer types to monitor (use exact NCCN guideline names)
-# Find available names at: https://www.nccn.org/guidelines/recently-published-guidelines
+# Find available names by running the list_guidelines MCP tool, or visit:
+# https://www.nccn.org/guidelines/category_1 (Cancer by Type, 69 guidelines)
+# https://www.nccn.org/guidelines/category_2 (Screening, 7 guidelines)
+# https://www.nccn.org/guidelines/category_3 (Supportive Care, 13 guidelines)
+# https://www.nccn.org/guidelines/category_4 (Specific Populations, 3 guidelines)
 watch_list:
   - "Non-Small Cell Lung Cancer"
   - "Breast Cancer"

@@ -1,7 +1,7 @@
 """NCCN login and PDF download — adapted from gscfwid/NCCN_guidelines_MCP."""
 
+import asyncio
 import os
-import time
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -148,7 +148,7 @@ class NCCNDownloader:
             if "text/html" in content_type and ("login" in resp.text.lower()):
                 logger.info("Login required, attempting authentication...")
                 if await self.login(pdf_url):
-                    time.sleep(1)  # Wait for session to stabilize
+                    await asyncio.sleep(1)  # Wait for session to stabilize
                     return await self.download_pdf(pdf_url, cache_dir, max_age_days)
                 logger.error("Auto-login failed for %s", pdf_url)
                 return None

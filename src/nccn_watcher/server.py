@@ -102,21 +102,34 @@ async def check_updates() -> str:
                 f"Last check: {state_mgr.last_check}"
             )
 
-        # Step 3: For each change, try to download PDF and extract notes
+        # Step 3: Get PDF URLs from Recently Published page
+        # Category pages only have detail URLs, not PDF URLs.
+        # Recently Published page has PDF links for recently updated guidelines.
+        pdf_url_map: dict[str, str] = {}
+        try:
+            recent = await fetch_recently_published()
+            pdf_url_map = {g.name: g.detail_url for g in recent}
+        except ScrapeError:
+            logger.warning("Could not fetch Recently Published page for PDF URLs")
+
+        # Step 4: For each change, try to download PDF and extract notes
         report_parts: list[str] = []
         report_parts.append(f"# NCCN Guideline Updates Detected ({len(changes)})\n")
 
         for change in changes:
+            pdf_url = pdf_url_map.get(change.name, "")
             section = [
                 f"## {change.name}",
                 f"**Version**: {change.old_version} → {change.new_version}",
                 f"**Category**: {change.category}",
                 f"**Detail**: {change.detail_url}",
             ]
+            if pdf_url:
+                section.append(f"**PDF**: {pdf_url}")
 
             # Try PDF download + analysis if credentials available
-            if analysis_cfg.get("enabled", True) and nccn_user:
-                pdf_path = await downloader.download_pdf(change.detail_url, cache_dir)
+            if analysis_cfg.get("enabled", True) and nccn_user and pdf_url:
+                pdf_path = await downloader.download_pdf(pdf_url, cache_dir)
                 if pdf_path:
                     notes = extract_update_notes(pdf_path, max_pages)
                     if notes:
@@ -133,6 +146,11 @@ async def check_updates() -> str:
                         section.append("\n*Could not extract update notes from PDF.*")
                 else:
                     section.append("\n*PDF download failed. Check NCCN credentials.*")
+            elif not pdf_url:
+                section.append(
+                    "\n*PDF URL not found on Recently Published page. "
+                    "Visit the detail page to download manually.*"
+                )
             else:
                 section.append(
                     "\n*AI analysis skipped — configure NCCN credentials for full analysis.*"
