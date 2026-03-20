@@ -73,21 +73,44 @@ python tests/integration_test.py
 
 ## OpenClaw Integration
 
-Add this MCP server to your OpenClaw configuration:
+### Native Plugin (recommended)
+
+Install as an OpenClaw plugin for direct tool registration:
+
+```bash
+# Copy plugin to OpenClaw extensions
+cp -r openclaw-plugin ~/.openclaw/extensions/nccn-monitor
+cd ~/.openclaw/extensions/nccn-monitor && npm install
+```
+
+Then add to your `~/.openclaw/openclaw.json` under `plugins.entries`:
 
 ```json
 {
-  "mcpServers": {
-    "nccn-monitor": {
-      "command": "python",
-      "args": ["-m", "nccn_monitor.server"],
-      "cwd": "/path/to/nccn-monitor"
-    }
+  "nccn-monitor": {
+    "enabled": true,
+    "pythonPath": "/path/to/nccn-monitor/.venv/bin/python",
+    "projectDir": "/path/to/nccn-monitor"
   }
 }
 ```
 
-Then set up a cron job in OpenClaw to call `check_updates` daily.
+After `openclaw gateway restart`, 6 tools (`nccn_check_updates`, `nccn_get_status`, etc.) appear natively in OpenClaw.
+
+### Via mcporter (alternative)
+
+If you prefer using mcporter as middleware:
+
+```bash
+npx mcporter config add nccn-monitor --transport stdio \
+  --command "/path/to/.venv/bin/python" --args "-m" --args "nccn_monitor.server"
+```
+
+Then use the `mcporter` skill in OpenClaw to call tools.
+
+### Cron scheduling
+
+Set up a daily cron job in OpenClaw to call `nccn_check_updates` (or `check_updates` via mcporter) for automatic monitoring.
 
 ## Architecture
 

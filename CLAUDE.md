@@ -19,6 +19,7 @@ Config tools: `find_guideline`, `update_watch_list`, `browse_guidelines`
 - `src/nccn_monitor/health.py` — Health check / silent failure detection
 - `src/nccn_monitor/guideline_names.py` — Chinese name mapping + fuzzy search for all 92 guidelines
 - `src/nccn_monitor/server.py` — MCP server entry point (6 tools)
+- `openclaw-plugin/` — Native OpenClaw plugin (TypeScript wrapper for MCP bridge)
 
 ## Testing
 
