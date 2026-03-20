@@ -15,6 +15,9 @@ NCCN Monitor tracks version changes across all 92 NCCN professional guidelines, 
 - **Health monitoring** — detects silent scraping failures and alerts after consecutive errors
 - **Chinese language support** — all 92 guidelines have Chinese names and aliases for fuzzy search
 - **Watch list management** — configure which guidelines to monitor via natural language (Chinese or English)
+- **On-demand PDF download** — download any guideline PDF by name (Chinese or English fuzzy search)
+- **Version archiving** — automatically archive old versions when updates are detected, with standardized filenames (`NCCN_GastricCancer_2026.V2_EN.pdf`)
+- **Change timeline** — view the full version history for any guideline
 
 ## Quick Start
 
