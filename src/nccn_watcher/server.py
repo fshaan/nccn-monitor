@@ -312,28 +312,8 @@ async def browse_guidelines() -> str:
     watch_list = config.get("watch_list", [])
     watch_set = {name.lower() for name in watch_list} if watch_list else set()
 
-    categories = {
-        "Cancer by Type": "肿瘤治疗（按类型）",
-        "Detection, Prevention & Risk Reduction": "筛查与预防",
-        "Supportive Care": "支持治疗",
-        "Specific Populations": "特殊人群",
-    }
-
-    lines = ["# NCCN 指南浏览\n"]
-
-    for cat_en, cat_zh in categories.items():
-        lines.append(f"\n## {cat_zh} ({cat_en})")
-        cat_guidelines = [
-            (en, info) for en, info in GUIDELINE_ZH.items()
-            # Match category by checking which guidelines belong to it
-        ]
-        # We need the actual category mapping, use scraper data
-        for en_name, info in GUIDELINE_ZH.items():
-            # Rough category mapping based on position in the dict
-            # (the dict is ordered by category in the source)
-            pass
-
-    # Simpler approach: just list all by category from the dict ordering
+    # GUIDELINE_ZH is ordered by category in the source file.
+    # These indexes must match the category boundaries in guideline_names.py.
     lines = ["# NCCN 指南浏览"]
     lines.append(f"当前监控列表：{len(watch_list)} 条\n")
 

@@ -14,7 +14,8 @@ OpenClaw calls these via MCP protocol (stdio transport).
 - `src/nccn_watcher/downloader.py` — NCCN login + PDF download (adapted from gscfwid/NCCN_guidelines_MCP)
 - `src/nccn_watcher/analyzer.py` — PDF update notes extraction + AI summary prompt
 - `src/nccn_watcher/health.py` — Health check / silent failure detection
-- `src/nccn_watcher/server.py` — MCP server entry point
+- `src/nccn_watcher/guideline_names.py` — Chinese name mapping + fuzzy search for all 92 guidelines
+- `src/nccn_watcher/server.py` — MCP server entry point (6 tools)
 
 ## Testing
 
