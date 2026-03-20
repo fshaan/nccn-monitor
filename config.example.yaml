@@ -1,0 +1,39 @@
+# NCCN Watcher Configuration
+# Copy this file to config.yaml and fill in your settings.
+
+# NCCN account credentials (free registration at nccn.org)
+# Required for PDF download and deep analysis
+nccn:
+  username: ""
+  password: ""
+
+# Cancer types to monitor (use exact NCCN guideline names)
+# Find available names by running the list_guidelines MCP tool, or visit:
+# https://www.nccn.org/guidelines/category_1 (Cancer by Type, 69 guidelines)
+# https://www.nccn.org/guidelines/category_2 (Screening, 7 guidelines)
+# https://www.nccn.org/guidelines/category_3 (Supportive Care, 13 guidelines)
+# https://www.nccn.org/guidelines/category_4 (Specific Populations, 3 guidelines)
+watch_list:
+  - "Non-Small Cell Lung Cancer"
+  - "Breast Cancer"
+  - "Gastric Cancer"
+  - "Colon Cancer"
+  - "Rectal Cancer"
+
+# Check frequency (cron expression, default: once daily at 8am)
+schedule: "0 8 * * *"
+
+# Analysis settings
+analysis:
+  # Enable AI-powered change summary (requires LLM access)
+  enabled: true
+  # Number of pages to extract from PDF for update notes (first N pages)
+  update_notes_pages: 5
+  # Language for AI summary output
+  language: "zh-CN"
+
+# State file location
+state_file: "~/.nccn-watcher/state.json"
+
+# PDF cache directory
+cache_dir: "~/.nccn-watcher/cache"
