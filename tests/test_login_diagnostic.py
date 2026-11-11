@@ -449,6 +449,28 @@ async def test_br_without_decoder_does_not_post(monkeypatch):
     assert secret not in json.dumps(diag)
 
 
+async def test_accept_encoding_follows_httpx_decoders_and_omits_unsupported_br():
+    """The downloader must not advertise br unless this interpreter can decode it."""
+    from nccn_monitor.downloader import BROWSER_HEADERS
+
+    assert "Accept-Encoding" not in BROWSER_HEADERS
+    assert "accept-encoding" not in BROWSER_HEADERS
+    downloader = NCCNDownloader(SECRET_USER, SECRET_PASSWORD)
+    bare = httpx.AsyncClient()
+    try:
+        client = await downloader._get_client()
+        advertised = client.headers["accept-encoding"]
+        assert advertised == bare.headers["accept-encoding"]
+        from httpx._decoders import SUPPORTED_DECODERS
+        if "br" not in SUPPORTED_DECODERS:
+            assert "br" not in advertised.split(", ")
+        else:
+            assert "br" in advertised.split(", ")
+    finally:
+        await downloader.close()
+        await bare.aclose()
+
+
 async def test_challenge_marker_does_not_post_credentials():
     html = _form("/login/Index/") + "<p>recaptcha fixture-challenge-secret</p>"
     diag, posts = await _diag_for(html)
