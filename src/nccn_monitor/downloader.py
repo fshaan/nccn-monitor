@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import logging
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,10 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 PDF_CACHE_MAX_AGE_DAYS = 7
+# Positive identity of an NCCN professional guideline. A cover may also mention
+# the patient series; that cross-link is not used as a rejection by itself.
+PROFESSIONAL_SERIES_MARKER = "clinical practice guidelines in oncology"
+_ARCHIVE_TEXT_PAGES = 5
 
 BROWSER_HEADERS = {
     "User-Agent": (
@@ -26,6 +31,85 @@ BROWSER_HEADERS = {
     "Accept-Encoding": "gzip, deflate, br",
     "Connection": "keep-alive",
 }
+
+
+def file_starts_with_pdf(path: Path) -> bool:
+    """True when the file begins with the PDF magic header."""
+    try:
+        with path.open("rb") as handle:
+            return handle.read(5).startswith(b"%PDF")
+    except OSError:
+        return False
+
+
+def _listable_archive_file(path: Path) -> bool:
+    """Files that may appear in archive history. HTML occupants are omitted."""
+    return path.is_file() and path.stat().st_size > 0 and not file_is_html_document(path)
+
+
+def file_is_html_document(path: Path) -> bool:
+    """True when the file's leading bytes are an HTML/login document."""
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(64).lstrip()
+    except OSError:
+        return False
+    return head.startswith((b"<", b"\xef\xbb\xbf<"))
+
+
+def extract_archive_text(path: Path, max_pages: int = _ARCHIVE_TEXT_PAGES) -> str:
+    """Extract text from the first pages. Layout coordinates are not used."""
+    from pypdf import PdfReader
+
+    reader = PdfReader(str(path))
+    parts: list[str] = []
+    for page in reader.pages[:max_pages]:
+        parts.append(page.extract_text() or "")
+    return re.sub(r"\s+", " ", "\n".join(parts)).strip()
+
+
+def professional_pdf_matches(path: Path, name: str, version: str) -> bool:
+    """Accept a PDF only with professional identity plus the requested name and version.
+
+    Occurrence of the patient-series phrase is not a rejection. Existing files
+    that already start with %PDF are not passed through this check by
+    download_and_archive, so previously stored professional PDFs stay put.
+    """
+    if not file_starts_with_pdf(path) or not name or not version:
+        return False
+    try:
+        text = extract_archive_text(path).casefold()
+    except Exception:
+        logger.info("Rejected unreadable PDF candidate: %s", path.name)
+        return False
+    folded_name = re.sub(r"\s+", " ", name).strip().casefold()
+    return (
+        PROFESSIONAL_SERIES_MARKER in text
+        and folded_name in text
+        and version.casefold() in text
+    )
+
+
+def valid_current_archive_exists(
+    slug: str,
+    version: str,
+    name: str,
+    archive_dir: str | Path,
+    filename: str = "",
+) -> bool:
+    """Whether this version's standard file is a non-empty PDF.
+
+    Only the named current version is checked. Older version directories are
+    not scanned, and a non-PDF occupant does not count.
+    """
+    from .scraper import format_pdf_filename
+
+    if not filename and name:
+        filename = format_pdf_filename(name, version)
+    elif not filename:
+        filename = "guideline.pdf"
+    path = Path(archive_dir).expanduser() / slug / f"v{version}" / filename
+    return path.is_file() and path.stat().st_size > 0 and file_starts_with_pdf(path)
 
 
 class NCCNDownloader:
@@ -199,8 +283,9 @@ class NCCNDownloader:
 
         pdf_path = archive_path / filename
 
-        # Already archived? Check for any PDF in this version dir
-        if pdf_path.exists() and pdf_path.stat().st_size > 0:
+        # A real PDF already at this version stays byte-for-byte. HTML or other
+        # non-PDF occupants do not count and may be replaced below.
+        if pdf_path.exists() and pdf_path.stat().st_size > 0 and file_starts_with_pdf(pdf_path):
             logger.info("Already archived: %s v%s", slug, version)
             return pdf_path
 
@@ -210,8 +295,25 @@ class NCCNDownloader:
         if not downloaded:
             return None
 
-        # Move to archive with standardized filename
+        if not professional_pdf_matches(downloaded, name, version):
+            logger.error(
+                "Rejected download for %s v%s: file is not the matching professional PDF",
+                slug,
+                version,
+            )
+            if downloaded.exists() and downloaded.resolve() != pdf_path.resolve():
+                downloaded.unlink()
+            return None
+
+        # Move to archive with standardized filename. Only a non-PDF occupant
+        # of this exact path is removed; other version directories are untouched.
         archive_path.mkdir(parents=True, exist_ok=True)
+        if pdf_path.exists():
+            if file_starts_with_pdf(pdf_path):
+                if downloaded.exists() and downloaded.resolve() != pdf_path.resolve():
+                    downloaded.unlink()
+                return pdf_path
+            pdf_path.unlink()
         shutil.move(str(downloaded), str(pdf_path))
 
         # Write metadata
@@ -263,15 +365,16 @@ def get_archived_versions(
             # Find the actual PDF file (could be renamed)
             pdf_file = meta.get("filename", "guideline.pdf")
             actual_path = version_dir / pdf_file
-            if not actual_path.exists():
-                # Fallback: find any .pdf in the directory
-                pdfs = list(version_dir.glob("*.pdf"))
-                actual_path = pdfs[0] if pdfs else version_dir / "guideline.pdf"
+            if not _listable_archive_file(actual_path):
+                pdfs = [path for path in version_dir.glob("*.pdf") if _listable_archive_file(path)]
+                if not pdfs:
+                    continue
+                actual_path = pdfs[0]
             meta["pdf_path"] = str(actual_path)
             versions.append(meta)
         else:
-            # No meta.json — find any PDF
-            pdfs = list(version_dir.glob("*.pdf"))
+            # No meta.json — find any non-HTML PDF-like file
+            pdfs = [path for path in version_dir.glob("*.pdf") if _listable_archive_file(path)]
             if pdfs:
                 versions.append({
                     "version": version_dir.name.lstrip("v"),

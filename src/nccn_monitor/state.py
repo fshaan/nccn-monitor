@@ -123,6 +123,15 @@ class StateManager:
         return changes
 
     @property
+    def initialized(self) -> bool:
+        """Whether a baseline has already been written.
+
+        This does not change detect_changes: an empty change list still means
+        the compared versions are unchanged.
+        """
+        return bool(self._data.get("initialized"))
+
+    @property
     def last_check(self) -> str | None:
         return self._data.get("last_check")
 

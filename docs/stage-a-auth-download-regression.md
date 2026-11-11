@@ -1,5 +1,7 @@
 # Stage A：NCCN 周更认证/下载失败诊断
 
+本文件是阶段 A 的作者说明。其中的「44 passed / 11 failed」是当时的叙述，不是阶段 B 开工时的闸门复跑。闸门复跑的完整 pytest 输出在 `docs/stage-b-auth-download-implementation.md`。
+
 本文件只记录 2026-11-11 调查结果、可复现的失败测试，以及建议的修复边界。生产实现没有改动。
 
 ## 远程基线

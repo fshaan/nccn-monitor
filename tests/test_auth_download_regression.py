@@ -23,6 +23,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from pypdf import PdfReader
 
 from nccn_monitor.downloader import NCCNDownloader, get_archived_versions
 from nccn_monitor.scraper import (
@@ -43,6 +44,12 @@ OLD_COLON_BYTES = b"%PDF-1.4\n%fixture-old-colon-professional\n"
 
 def _read_fixture(relative: str) -> bytes:
     return (FIXTURES / relative).read_bytes()
+
+
+def _pdf_text(path: Path) -> str:
+    """Text extraction only. No page size, rotation, or coordinate checks."""
+    reader = PdfReader(str(path))
+    return "\n".join((page.extract_text() or "") for page in reader.pages)
 
 
 def _write_archived_version(
@@ -304,7 +311,8 @@ async def test_non_pdf_occupant_can_be_replaced_by_matching_professional_pdf(tmp
     """Retry must be able to store a matching PDF over a login page at that path.
 
     The previous version's %PDF bytes stay in place. Only the non-PDF occupant
-    of the requested version may be replaced.
+    of the requested version may be replaced. Name and version are read from
+    extracted text, not from uncompressed file bytes.
     """
     archive = tmp_path / "archive"
     old_pdf = _write_archived_version(
@@ -342,11 +350,10 @@ async def test_non_pdf_occupant_can_be_replaced_by_matching_professional_pdf(tmp
         await downloader.close()
 
     assert result is not None
-    stored = result.read_bytes()
-    assert stored.startswith(b"%PDF")
-    assert b"Gastric Cancer" in stored
-    assert b"2.2026" in stored
-    assert b"Guidelines for Patients" not in stored
+    assert result.read_bytes().startswith(b"%PDF")
+    text = _pdf_text(result)
+    assert "Gastric Cancer" in text
+    assert "2.2026" in text
     assert old_pdf.read_bytes() == old_pdf_bytes
     assert (old_pdf.parent / "meta.json").read_bytes() == old_meta_bytes
     listed = [
@@ -354,6 +361,52 @@ async def test_non_pdf_occupant_can_be_replaced_by_matching_professional_pdf(tmp
         for item in get_archived_versions("gastric-cancer", archive_dir=archive)
     ]
     assert listed == ["2.2026", "1.2026"]
+
+
+async def test_compressed_professional_cover_with_patient_crosslink_is_archived(tmp_path: Path):
+    """A professional cover may mention the patient series, including in a compressed stream.
+
+    Acceptance uses extracted text. The raw file is FlateDecode and does not
+    contain those phrases as plaintext, and no page geometry is asserted.
+    """
+    archive = tmp_path / "archive"
+    old_pdf = _write_archived_version(
+        archive,
+        "gastric-cancer",
+        "1.2026",
+        "Gastric Cancer",
+        PROFESSIONAL_GASTRIC_URL,
+        OLD_GASTRIC_BYTES,
+    )
+    old_pdf_bytes = old_pdf.read_bytes()
+    old_meta_bytes = (old_pdf.parent / "meta.json").read_bytes()
+    body = _read_fixture("pdf/professional_gastric_v2_2026_compressed.pdf")
+    assert b"Gastric Cancer" not in body
+    assert b"Guidelines for Patients" not in body
+    assert b"Clinical Practice Guidelines" not in body
+
+    downloader = NCCNDownloader("fixture-user", "fixture-password")
+    _bind_client(downloader, [("application/pdf", body)])
+    try:
+        result = await downloader.download_and_archive(
+            PROFESSIONAL_GASTRIC_URL,
+            "gastric-cancer",
+            "2.2026",
+            name="Gastric Cancer",
+            archive_dir=archive,
+        )
+    finally:
+        await downloader.close()
+
+    assert result is not None
+    assert result.read_bytes().startswith(b"%PDF")
+    text = _pdf_text(result)
+    assert "Clinical Practice Guidelines in Oncology" in text
+    assert "Gastric Cancer" in text
+    assert "2.2026" in text
+    assert "Guidelines for Patients" in text
+    assert old_pdf.read_bytes() == old_pdf_bytes
+    assert (old_pdf.parent / "meta.json").read_bytes() == old_meta_bytes
 
 
 # ── Weekly check retry ───────────────────────────────────────────────
