@@ -200,8 +200,41 @@ def archive_followups_for_recorded_versions(
     return followups
 
 
+_DIAGNOSTIC_MEDIA_TYPES = frozenset({
+    "text/html",
+    "text/plain",
+    "application/pdf",
+    "application/xhtml+xml",
+})
+_NCCN_HOSTS = frozenset({"nccn.org", "www.nccn.org"})
+
+
 def _media_type(content_type: str) -> str:
-    return content_type.split(";", 1)[0].strip().lower()
+    """Return an allowlisted media type, never the raw header."""
+    media = content_type.split(";", 1)[0].strip().lower()
+    if media in _DIAGNOSTIC_MEDIA_TYPES:
+        return media
+    return "other" if media else ""
+
+
+def _host_class(hostname: str | None) -> str:
+    if (hostname or "").lower() in _NCCN_HOSTS:
+        return "nccn"
+    return "other"
+
+
+def _path_class(path: str) -> str:
+    """Classify a path. The path text itself is not returned."""
+    normalized = path or "/"
+    if len(normalized) > 1 and normalized.endswith("/"):
+        trimmed = normalized[:-1]
+    else:
+        trimmed = normalized
+    if trimmed.lower() == "/login/index":
+        return "login"
+    if trimmed == "/":
+        return "known-root"
+    return "other"
 
 
 def _diagnostic_flags(text: str) -> dict[str, bool]:
@@ -218,13 +251,13 @@ def _diagnostic_flags(text: str) -> dict[str, bool]:
 
 
 def _diagnostic_view(response) -> dict:
-    """Safe fields from one response. Query, userinfo, body, and headers are omitted."""
+    """Allowlisted fields only. No host, path, query, header, or body text."""
     parts = urlsplit(str(response.url))
     flags = _diagnostic_flags(response.text)
     return {
         "status_code": response.status_code,
-        "host": parts.hostname or "",
-        "path": parts.path or "",
+        "host_class": _host_class(parts.hostname),
+        "path_class": _path_class(parts.path),
         "content_type": _media_type(response.headers.get("content-type", "")),
         "has_login_form": flags["has_login_form"],
         "has_account": flags["has_account"],
@@ -236,13 +269,26 @@ def _empty_diagnostic(error: str) -> dict:
     return {
         "error": error,
         "status_code": None,
-        "host": "",
-        "path": "",
+        "host_class": "other",
+        "path_class": "other",
         "content_type": "",
         "has_login_form": False,
         "has_account": False,
         "has_logout": False,
     }
+
+
+class _bounded_diagnostic_logs:
+    """Drop all log records for one diagnostic call, then restore the manager."""
+
+    def __enter__(self):
+        self._previous = logging.root.manager.disable
+        logging.disable(logging.CRITICAL)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        logging.disable(self._previous)
+        return False
 
 
 class NCCNDownloader:
@@ -330,53 +376,45 @@ class NCCNDownloader:
         """Observe one ordinary login attempt and return only safe fields.
 
         For an authorized local run. This does not decide whether login
-        succeeded, and it does not change ``login()``. The result has the
-        status code, host, path with the query removed, content type, and
-        booleans for a login form, account settings, and log out. Credentials,
-        request bodies, headers, cookies, tokens, raw pages, and full URLs
-        are not logged or returned.
+        succeeded, and it does not change ``login()``. The result uses
+        host and path classifications, an allowlisted media type, and
+        booleans for a login form, account settings, and log out.
+        Credentials, request bodies, headers, cookies, tokens, raw pages,
+        and URL components are not logged or returned.
         """
         if not self.username or not self.password:
-            logger.error("Cannot diagnose login: no credentials configured")
             return _empty_diagnostic("credentials_not_configured")
 
         client = await self._get_client()
-        quiet_loggers = [logging.getLogger(name) for name in ("httpx", "httpcore")]
-        previous_levels = [item.level for item in quiet_loggers]
-        for item in quiet_loggers:
-            item.setLevel(logging.WARNING)
         try:
-            resp = await client.get(target_url)
-            if resp.status_code != 200:
-                return _diagnostic_view(resp)
-            soup = BeautifulSoup(resp.text, "html.parser")
-            form = soup.find("form", {"action": "/login/Index/"})
-            if not form:
-                return _diagnostic_view(resp)
-            form_data = {}
-            for inp in form.find_all("input", {"type": "hidden"}):
-                name = inp.get("name")
-                if name:
-                    form_data[name] = inp.get("value", "")
-            form_data["Username"] = self.username
-            form_data["Password"] = self.password
-            form_data["RememberMe"] = "false"
-            result = await client.post(
-                "https://www.nccn.org/login/Index/",
-                data=form_data,
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "Referer": str(resp.url),
-                    "Origin": "https://www.nccn.org",
-                },
-            )
-            return _diagnostic_view(result)
+            with _bounded_diagnostic_logs():
+                resp = await client.get(target_url)
+                if resp.status_code != 200:
+                    return _diagnostic_view(resp)
+                soup = BeautifulSoup(resp.text, "html.parser")
+                form = soup.find("form", {"action": "/login/Index/"})
+                if not form:
+                    return _diagnostic_view(resp)
+                form_data = {}
+                for inp in form.find_all("input", {"type": "hidden"}):
+                    name = inp.get("name")
+                    if name:
+                        form_data[name] = inp.get("value", "")
+                form_data["Username"] = self.username
+                form_data["Password"] = self.password
+                form_data["RememberMe"] = "false"
+                result = await client.post(
+                    "https://www.nccn.org/login/Index/",
+                    data=form_data,
+                    headers={
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "Referer": "https://www.nccn.org/",
+                        "Origin": "https://www.nccn.org",
+                    },
+                )
+                return _diagnostic_view(result)
         except Exception:
-            logger.error("Login diagnostic request failed")
             return _empty_diagnostic("request_failed")
-        finally:
-            for item, level in zip(quiet_loggers, previous_levels):
-                item.setLevel(level)
 
     async def download_pdf(
         self,

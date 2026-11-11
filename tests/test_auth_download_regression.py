@@ -619,8 +619,8 @@ async def test_login_diagnostic_returns_only_safe_fields(caplog):
 
     assert diag == {
         "status_code": 200,
-        "host": "www.nccn.org",
-        "path": "/home",
+        "host_class": "nccn",
+        "path_class": "other",
         "content_type": "text/html",
         "has_login_form": False,
         "has_account": True,

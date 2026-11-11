@@ -57,7 +57,7 @@ FAILED tests/test_weekly_check.py::test_wrapper_path_retries_recorded_version_wh
 ============================== 1 failed in 0.14s ===============================
 ```
 
-接上 `archive_followups_for_recorded_versions` 之后，同一条测试 exit 0。随后整套是 `69 passed`。
+接上 `archive_followups_for_recorded_versions` 之后，同一条 pytest 进程退出码是 0，表示测试通过。这和周检函数返回 1 不是同一件事：函数返回 1 只表示至少归档了一份 PDF。随后整套 pytest 也是进程退出码 0，`69 passed`。
 
 ```
 /workspace/.venv/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
