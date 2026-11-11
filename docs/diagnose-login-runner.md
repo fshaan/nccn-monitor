@@ -67,7 +67,7 @@ stdout 只能是一行白名单 JSON。stderr 若非空，整次输出视为可�
 /Users/f.sh/Workspace/devs/nccn_watcher/.venv/bin/python -c "import importlib.util; print('brotli' if importlib.util.find_spec('brotli') or importlib.util.find_spec('brotlicffi') else 'no-brotli')"
 ```
 
-本仓库没有 GitHub Actions。下面两段是这次工作区命令的原始输出，不是第三方独验。红灯绑定的是仍含 `Accept-Encoding: gzip, deflate, br` 的 downloader。绿灯绑定的 downloader blob 是 `b9536715c285d19958d5908956905a97346971e8`；运行器 blob 仍是 `b9005212d3de6e6733f6de2527ed2b49ff3bec3f`；`__init__.py` 仍是 `da9ae4c80b8b962cb8564294c6cf3f9fe20c4225`。先前文档把 8 条旧会话标成 12 passed，那次转录作废。
+本仓库没有 GitHub Actions。下面两段是这次工作区命令的原始输出，不是第三方独验。红灯绑定的是仍含 `Accept-Encoding: gzip, deflate, br` 的 downloader。绿灯绑定的提交是 `d1cb7995f79003a1e28c2fe310390a18d5d081f3`。其中 downloader blob 是 `b9536715c285d19958d5908956905a97346971e8`，运行器 blob 是 `b9005212d3de6e6733f6de2527ed2b49ff3bec3f`，`__init__.py` blob 是 `da9ae4c80b8b962cb8564294c6cf3f9fe20c4225`。这是本工作区执行，不是第三方 CI 独验。先前文档把 8 条旧会话标成 12 passed，那次转录作废。
 
 ### 红灯
 
