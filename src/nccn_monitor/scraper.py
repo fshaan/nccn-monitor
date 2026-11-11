@@ -404,19 +404,45 @@ def parse_detail_page_for_pdf(html: str) -> str | None:
         # Look for the next pdfList after this header
         pdf_list = gl_header.find_next("ul", class_="pdfList")
         if pdf_list:
-            link = pdf_list.find("a", href=lambda h: h and ".pdf" in h)
-            if link:
-                href = link["href"]
-                return href if href.startswith("http") else NCCN_BASE + href
+            hrefs = _pdf_hrefs(pdf_list)
+            if hrefs:
+                return _select_main_pdf(hrefs)
 
     # Strategy 2: Fallback — find any professional guideline PDF link
-    for link in soup.find_all("a", href=True):
-        href = link["href"]
-        if "/professionals/physician_gls/pdf/" in href and href.endswith(".pdf"):
-            # Skip Evidence Blocks and Frameworks
-            if "_blocks" not in href and "_core" not in href and "_basic" not in href and "_enhanced" not in href:
-                return href if href.startswith("http") else NCCN_BASE + href
+    fallback = [
+        href for href in _pdf_hrefs(soup)
+        if "/professionals/physician_gls/pdf/" in href and href.endswith(".pdf")
+    ]
+    return _select_main_pdf(fallback)
 
+
+def _pdf_hrefs(container) -> list[str]:
+    hrefs = []
+    for link in container.find_all("a", href=True):
+        href = link["href"]
+        if href and ".pdf" in href:
+            hrefs.append(href)
+    return hrefs
+
+
+def _is_patient_pdf(href: str) -> bool:
+    """Patient-guide URLs and filenames are not the professional guideline."""
+    lowered = href.lower()
+    filename = lowered.rsplit("/", 1)[-1]
+    return "/patients/" in lowered or "patient" in filename
+
+
+def _is_non_main_professional_pdf(href: str) -> bool:
+    """Evidence Blocks and framework variants are not the main guideline."""
+    lowered = href.lower()
+    return any(marker in lowered for marker in ("_blocks", "_core", "_basic", "_enhanced"))
+
+
+def _select_main_pdf(hrefs: list[str]) -> str | None:
+    for href in hrefs:
+        if _is_patient_pdf(href) or _is_non_main_professional_pdf(href):
+            continue
+        return href if href.startswith("http") else NCCN_BASE + href
     return None
 
 

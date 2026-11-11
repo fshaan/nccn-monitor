@@ -12,7 +12,15 @@ from .scraper import (
     slugify, ScrapeError,
 )
 from .state import StateManager
-from .downloader import NCCNDownloader, get_archived_versions
+from .downloader import (
+    ARCHIVE_BLOCKED_INVALID_EXISTING,
+    ARCHIVE_VALID,
+    BLOCKED_EXISTING_PDF_MESSAGE,
+    NCCNDownloader,
+    archive_followups_for_recorded_versions,
+    classify_current_archive,
+    get_archived_versions,
+)
 from .analyzer import extract_update_notes, build_summary_prompt
 from .health import HealthTracker
 from .guideline_names import search_guidelines, get_zh_name, GUIDELINE_ZH
@@ -97,10 +105,15 @@ async def check_updates() -> str:
         current = await fetch_all_guidelines()
         health.record_success()
 
-        # Step 2: Detect version changes
+        # Step 2: Detect version changes. An empty list still means the
+        # compared versions are unchanged. Archive retry is separate and only
+        # runs after a baseline already exists, so the first run does not
+        # download every watched guideline.
+        already_initialized = state_mgr.initialized
         changes = state_mgr.detect_changes(current, watch_list or None)
+        archive_dir = config.get("archive_dir", "~/.nccn-monitor/archive")
 
-        if not changes:
+        if not changes and not already_initialized:
             return (
                 f"No guideline updates detected. "
                 f"Checked {len(current)} guidelines. "
@@ -110,36 +123,99 @@ async def check_updates() -> str:
         # Step 3: Get PDF URLs from index (crawls detail pages if needed)
         index = await fetch_pdf_index(current)
         pdf_url_map = {e.name: e for e in index}
+        followups = []
+        if already_initialized:
+            followups = archive_followups_for_recorded_versions(
+                current,
+                state_mgr.known_guidelines,
+                watch_list,
+                archive_dir,
+                slug_for_name={name: entry.slug for name, entry in pdf_url_map.items()},
+                skip_names={change.name for change in changes},
+            )
 
-        # Step 4: For each change, archive + download PDF + extract notes
+        if not changes and not followups:
+            return (
+                f"No guideline updates detected. "
+                f"Checked {len(current)} guidelines. "
+                f"Last check: {state_mgr.last_check}"
+            )
+
+        # Step 4: Download missing or non-PDF occupants. An existing %PDF that
+        # fails the professional check is reported and left untouched.
         report_parts: list[str] = []
-        report_parts.append(f"# NCCN Guideline Updates Detected ({len(changes)})\n")
+        if changes:
+            report_parts.append(f"# NCCN Guideline Updates Detected ({len(changes)})\n")
+        else:
+            report_parts.append(f"# NCCN Guideline Archives Missing ({len(followups)})\n")
 
-        for change in changes:
-            entry = pdf_url_map.get(change.name)
+        jobs = [
+            {
+                "name": change.name,
+                "version_line": f"**Version**: {change.old_version} → {change.new_version}",
+                "category": change.category,
+                "detail_url": change.detail_url,
+                "archive_version": change.new_version,
+                "old_version": change.old_version,
+                "new_version": change.new_version,
+                "status": None,
+            }
+            for change in changes
+        ]
+        jobs.extend(
+            {
+                "name": item["name"],
+                "version_line": (
+                    f"**Version**: {item['version']} ({item['status']})"
+                ),
+                "category": item["category"],
+                "detail_url": item["detail_url"],
+                "archive_version": item["version"],
+                "old_version": item["version"],
+                "new_version": item["version"],
+                "status": item["status"],
+            }
+            for item in followups
+        )
+
+        for job in jobs:
+            entry = pdf_url_map.get(job["name"])
             section = [
-                f"## {change.name} ({get_zh_name(change.name)})",
-                f"**Version**: {change.old_version} → {change.new_version}",
-                f"**Category**: {change.category}",
-                f"**Detail**: {change.detail_url}",
+                f"## {job['name']} ({get_zh_name(job['name'])})",
+                job["version_line"],
+                f"**Category**: {job['category']}",
+                f"**Detail**: {job['detail_url']}",
             ]
             if entry:
                 section.append(f"**PDF**: {entry.pdf_url}")
+            status = job["status"]
+            if status is None and entry:
+                status = classify_current_archive(
+                    entry.slug, job["archive_version"], job["name"], archive_dir,
+                )
+            if status == ARCHIVE_BLOCKED_INVALID_EXISTING:
+                section.append(f"\n*{BLOCKED_EXISTING_PDF_MESSAGE}*")
+                report_parts.append("\n".join(section))
+                continue
+            if status == ARCHIVE_VALID:
+                section.append("\n*Valid professional archive already present.*")
+                report_parts.append("\n".join(section))
+                continue
 
             # Try PDF download + archive + analysis if credentials available
             if analysis_cfg.get("enabled", True) and nccn_user and entry:
                 pdf_path = await downloader.download_and_archive(
-                    entry.pdf_url, entry.slug, change.new_version,
-                    name=change.name,
-                    archive_dir=config.get("archive_dir", "~/.nccn-monitor/archive"),
+                    entry.pdf_url, entry.slug, job["archive_version"],
+                    name=job["name"],
+                    archive_dir=archive_dir,
                 )
                 if pdf_path:
                     notes = extract_update_notes(pdf_path, max_pages)
                     if notes:
                         prompt = build_summary_prompt(
-                            change.name,
-                            change.old_version,
-                            change.new_version,
+                            job["name"],
+                            job["old_version"],
+                            job["new_version"],
                             notes,
                             language,
                         )
