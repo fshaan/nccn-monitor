@@ -30,6 +30,7 @@ from nccn_monitor.downloader import (
     ARCHIVE_VALID,
     BLOCKED_EXISTING_PDF_MESSAGE,
     NCCNDownloader,
+    _brotli_decoder_present,
     classify_current_archive,
     get_archived_versions,
 )
@@ -625,6 +626,16 @@ async def test_login_diagnostic_returns_only_safe_fields(caplog):
         "has_login_form": False,
         "has_account": True,
         "has_logout": True,
+        "observed_stage": "post",
+        "get_form_action_class": "exact-relative",
+        "get_password_control": "type-password",
+        "get_username_control": "absent",
+        "get_hidden_count_class": "one",
+        "get_challenge_class": "none",
+        "get_content_encoding_class": "absent",
+        "get_body_decodable": True,
+        "final_content_encoding_class": "absent",
+        "brotli_decoder_present": _brotli_decoder_present(),
     }
     rendered = json.dumps(diag)
     log_text = caplog.text

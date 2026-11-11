@@ -14,11 +14,26 @@
 
 | 隔离路径 | git blob |
 | --- | --- |
-| `$ISOLATE/scripts/diagnose_nccn_login.py` | `c287b0ca348dcc5826c8ac8c4df6450a2325deb9` |
+| `$ISOLATE/scripts/diagnose_nccn_login.py` | `b9005212d3de6e6733f6de2527ed2b49ff3bec3f` |
 | `$ISOLATE/src/nccn_monitor/__init__.py` | `da9ae4c80b8b962cb8564294c6cf3f9fe20c4225` |
-| `$ISOLATE/src/nccn_monitor/downloader.py` | `8a5c9b3247ac51e02c05a526d4b7bfa9b03a9e59` |
+| `$ISOLATE/src/nccn_monitor/downloader.py` | `8d0533fa52551e5958d56e79831729f26c6f7734` |
 
-`8345886` 上的运行器 blob `fc3141a39c538eca76f810896d251f3f0ef2f420` 已被本轮替换。downloader 与 `__init__.py` 的 blob 没有变。
+`564fa54` 的运行器 blob `c287b0ca348dcc5826c8ac8c4df6450a2325deb9` 和 downloader blob `8a5c9b3247ac51e02c05a526d4b7bfa9b03a9e59` 已被这次观测字段替换。`__init__.py` 没变。`login()` 的成功判断没变，也没有去掉固定的 `br` 宣传。
+
+## 这次新增的观测字段
+
+最终响应仍用原来的 `status_code`、`host_class`、`path_class`、`content_type` 和三个布尔值。GET 与最终响应分开命名：
+
+- `observed_stage`：`not-reached`、`get`、`post`
+- `get_form_action_class`：`not-decoded`、`absent`、`exact-relative`、`slash-or-case-variant`、`absolute-nccn`、`other`
+- `get_password_control`：`not-decoded`、`absent`、`type-password`、`other-type`
+- `get_username_control`：`not-decoded`、`absent`、`present`
+- `get_hidden_count_class`：`not-decoded`、`zero`、`one`、`several`
+- `get_challenge_class`：`not-decoded`、`none`、`captcha-marker`、`interstitial-marker`
+- `get_content_encoding_class` 与 `final_content_encoding_class`：`absent`、`gzip`、`deflate`、`br`、`other`
+- `get_body_decodable`、`brotli_decoder_present`：布尔
+
+GET 上只要识别到 challenge，诊断立刻返回，不提交凭据。生产 `login()` 仍会按原条件找表单。没有 brotli 且 GET 编码是 `br` 时，正文标成不可解码，也不提交。这些都只是观测。
 
 核对命令（不要在这条命令里实例化 downloader，也不要发网络请求）：
 
@@ -54,7 +69,7 @@ stdout 只能是一行白名单 JSON。stderr 若非空，整次输出视为可�
 .venv/bin/python -m pytest tests/test_login_diagnostic.py tests/test_auth_download_regression.py::test_login_diagnostic_returns_only_safe_fields -v --tb=short
 ```
 
-pytest 进程退出码 0。这不是周检返回 1，也不是诊断进程退出码 0。
+红灯是这 4 条新测试在字段落地前失败：`observed_stage` 缺失，`_brotli_decoder_present` 不存在，带验证码标记的页面仍然 POST。绿灯命令如下，pytest 进程退出码 0，12 passed。这不是周检返回 1，也不是诊断进程退出码 0。
 
 ```
 /workspace/.venv/lib/python3.12/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.

@@ -237,6 +237,160 @@ def _path_class(path: str) -> str:
     return "other"
 
 
+def _brotli_decoder_present() -> bool:
+    try:
+        import brotli  # noqa: F401
+    except ImportError:
+        try:
+            import brotlicffi  # noqa: F401
+        except ImportError:
+            return False
+    return True
+
+
+def _content_encoding_class(response) -> str:
+    try:
+        values = response.headers.get_list("content-encoding")
+    except Exception:
+        raw = response.headers.get("content-encoding", "")
+        values = [raw] if raw else []
+    if not values or not str(values[0]).strip():
+        return "absent"
+    token = str(values[0]).split(",", 1)[0].strip().lower()
+    if token in {"gzip", "deflate", "br"}:
+        return token
+    return "other"
+
+
+def _body_decodable(response, encoding_class: str, brotli_present: bool) -> bool:
+    if encoding_class == "br" and not brotli_present:
+        return False
+    if encoding_class == "other":
+        return False
+    try:
+        response.text
+    except Exception:
+        return False
+    return True
+
+
+def _challenge_class(text: str) -> str:
+    folded = re.sub(r"\s+", " ", text or "").casefold()
+    if any(marker in folded for marker in (
+        "just a moment",
+        "cf-challenge",
+        "challenge-platform",
+        "cdn-cgi/challenge",
+    )):
+        return "interstitial-marker"
+    if any(marker in folded for marker in ("recaptcha", "hcaptcha", "captcha")):
+        return "captcha-marker"
+    return "none"
+
+
+def _one_action_class(action) -> str:
+    if not isinstance(action, str) or not action.strip():
+        return "absent"
+    raw = action.strip()
+    if raw == "/login/Index/":
+        return "exact-relative"
+    parts = urlsplit(raw)
+    host = (parts.hostname or "").lower()
+    path = parts.path or ""
+    if path.lower().rstrip("/") == "/login/index":
+        return "slash-or-case-variant"
+    if host in _NCCN_HOSTS:
+        return "absolute-nccn"
+    return "other"
+
+
+def _form_action_class(text: str) -> str:
+    soup = BeautifulSoup(text or "", "html.parser")
+    forms = soup.find_all("form")
+    if not forms:
+        return "absent"
+    priority = {
+        "exact-relative": 0,
+        "slash-or-case-variant": 1,
+        "absolute-nccn": 2,
+        "other": 3,
+        "absent": 4,
+    }
+    best = "absent"
+    for form in forms:
+        kind = _one_action_class(form.get("action"))
+        if priority[kind] < priority[best]:
+            best = kind
+    return best
+
+
+def _password_control(text: str) -> str:
+    soup = BeautifulSoup(text or "", "html.parser")
+    other_type = False
+    for inp in soup.find_all("input"):
+        typ = inp.get("type")
+        name = inp.get("name")
+        typ_l = typ.casefold() if isinstance(typ, str) else ""
+        name_l = name.casefold() if isinstance(name, str) else ""
+        if typ_l == "password":
+            return "type-password"
+        if name_l == "password":
+            other_type = True
+    return "other-type" if other_type else "absent"
+
+
+def _username_control(text: str) -> str:
+    soup = BeautifulSoup(text or "", "html.parser")
+    for inp in soup.find_all("input"):
+        name = inp.get("name")
+        if isinstance(name, str) and name.casefold() == "username":
+            return "present"
+    return "absent"
+
+
+def _hidden_count_class(text: str) -> str:
+    soup = BeautifulSoup(text or "", "html.parser")
+    count = 0
+    for inp in soup.find_all("input"):
+        typ = inp.get("type")
+        if isinstance(typ, str) and typ.casefold() == "hidden":
+            count += 1
+    if count <= 0:
+        return "zero"
+    if count == 1:
+        return "one"
+    return "several"
+
+
+def _inspect_get(response) -> dict:
+    encoding = _content_encoding_class(response)
+    brotli_present = _brotli_decoder_present()
+    decodable = _body_decodable(response, encoding, brotli_present)
+    info = {
+        "get_content_encoding_class": encoding,
+        "get_body_decodable": decodable,
+        "brotli_decoder_present": brotli_present,
+    }
+    if not decodable:
+        info.update({
+            "get_form_action_class": "not-decoded",
+            "get_password_control": "not-decoded",
+            "get_username_control": "not-decoded",
+            "get_hidden_count_class": "not-decoded",
+            "get_challenge_class": "not-decoded",
+        })
+        return info
+    text = response.text
+    info.update({
+        "get_form_action_class": _form_action_class(text),
+        "get_password_control": _password_control(text),
+        "get_username_control": _username_control(text),
+        "get_hidden_count_class": _hidden_count_class(text),
+        "get_challenge_class": _challenge_class(text),
+    })
+    return info
+
+
 def _diagnostic_flags(text: str) -> dict[str, bool]:
     """Booleans only. The page text is not returned."""
     soup = BeautifulSoup(text or "", "html.parser")
@@ -250,11 +404,17 @@ def _diagnostic_flags(text: str) -> dict[str, bool]:
     }
 
 
-def _diagnostic_view(response) -> dict:
+def _diagnostic_view(response, get_info: dict, observed_stage: str) -> dict:
     """Allowlisted fields only. No host, path, query, header, or body text."""
     parts = urlsplit(str(response.url))
-    flags = _diagnostic_flags(response.text)
-    return {
+    flags = _diagnostic_flags(response.text if get_info.get("get_body_decodable") or observed_stage == "post" else "")
+    if observed_stage == "get" and not get_info.get("get_body_decodable"):
+        flags = {
+            "has_login_form": False,
+            "has_account": False,
+            "has_logout": False,
+        }
+    view = {
         "status_code": response.status_code,
         "host_class": _host_class(parts.hostname),
         "path_class": _path_class(parts.path),
@@ -262,7 +422,11 @@ def _diagnostic_view(response) -> dict:
         "has_login_form": flags["has_login_form"],
         "has_account": flags["has_account"],
         "has_logout": flags["has_logout"],
+        "observed_stage": observed_stage,
+        "final_content_encoding_class": _content_encoding_class(response),
     }
+    view.update(get_info)
+    return view
 
 
 def _empty_diagnostic(error: str) -> dict:
@@ -275,6 +439,16 @@ def _empty_diagnostic(error: str) -> dict:
         "has_login_form": False,
         "has_account": False,
         "has_logout": False,
+        "observed_stage": "not-reached",
+        "get_form_action_class": "not-decoded",
+        "get_password_control": "not-decoded",
+        "get_username_control": "not-decoded",
+        "get_hidden_count_class": "not-decoded",
+        "get_challenge_class": "not-decoded",
+        "get_content_encoding_class": "absent",
+        "get_body_decodable": False,
+        "final_content_encoding_class": "absent",
+        "brotli_decoder_present": _brotli_decoder_present(),
     }
 
 
@@ -389,12 +563,17 @@ class NCCNDownloader:
         try:
             with _bounded_diagnostic_logs():
                 resp = await client.get(target_url)
-                if resp.status_code != 200:
-                    return _diagnostic_view(resp)
+                get_info = _inspect_get(resp)
+                if resp.status_code != 200 or not get_info["get_body_decodable"]:
+                    return _diagnostic_view(resp, get_info, "get")
+                if get_info["get_challenge_class"] != "none":
+                    return _diagnostic_view(resp, get_info, "get")
+                if get_info["get_form_action_class"] != "exact-relative":
+                    return _diagnostic_view(resp, get_info, "get")
                 soup = BeautifulSoup(resp.text, "html.parser")
                 form = soup.find("form", {"action": "/login/Index/"})
                 if not form:
-                    return _diagnostic_view(resp)
+                    return _diagnostic_view(resp, get_info, "get")
                 form_data = {}
                 for inp in form.find_all("input", {"type": "hidden"}):
                     name = inp.get("name")
@@ -412,7 +591,7 @@ class NCCNDownloader:
                         "Origin": "https://www.nccn.org",
                     },
                 )
-                return _diagnostic_view(result)
+                return _diagnostic_view(result, get_info, "post")
         except Exception:
             return _empty_diagnostic("request_failed")
 

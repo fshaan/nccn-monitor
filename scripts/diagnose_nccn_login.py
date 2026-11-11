@@ -58,6 +58,16 @@ _OUTPUT_KEYS = (
     "has_login_form",
     "has_account",
     "has_logout",
+    "observed_stage",
+    "get_form_action_class",
+    "get_password_control",
+    "get_username_control",
+    "get_hidden_count_class",
+    "get_challenge_class",
+    "get_content_encoding_class",
+    "get_body_decodable",
+    "final_content_encoding_class",
+    "brotli_decoder_present",
     "error",
 )
 _ALLOWED_ERRORS = frozenset({"credentials_not_configured", "request_failed"})
@@ -70,6 +80,16 @@ _FAILED = {
     "has_login_form": False,
     "has_account": False,
     "has_logout": False,
+    "observed_stage": "not-reached",
+    "get_form_action_class": "not-decoded",
+    "get_password_control": "not-decoded",
+    "get_username_control": "not-decoded",
+    "get_hidden_count_class": "not-decoded",
+    "get_challenge_class": "not-decoded",
+    "get_content_encoding_class": "absent",
+    "get_body_decodable": False,
+    "final_content_encoding_class": "absent",
+    "brotli_decoder_present": False,
 }
 _MISSING = {
     "error": "credentials_not_configured",
@@ -80,6 +100,16 @@ _MISSING = {
     "has_login_form": False,
     "has_account": False,
     "has_logout": False,
+    "observed_stage": "not-reached",
+    "get_form_action_class": "not-decoded",
+    "get_password_control": "not-decoded",
+    "get_username_control": "not-decoded",
+    "get_hidden_count_class": "not-decoded",
+    "get_challenge_class": "not-decoded",
+    "get_content_encoding_class": "absent",
+    "get_body_decodable": False,
+    "final_content_encoding_class": "absent",
+    "brotli_decoder_present": False,
 }
 _emitted = False
 

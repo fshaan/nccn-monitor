@@ -89,7 +89,19 @@ async def test_path_and_query_secrets_stay_out_of_diagnostic(caplog):
         "has_login_form",
         "has_account",
         "has_logout",
+        "observed_stage",
+        "get_form_action_class",
+        "get_password_control",
+        "get_username_control",
+        "get_hidden_count_class",
+        "get_challenge_class",
+        "get_content_encoding_class",
+        "get_body_decodable",
+        "final_content_encoding_class",
+        "brotli_decoder_present",
     }
+    assert diag["observed_stage"] == "post"
+    assert diag["get_form_action_class"] == "exact-relative"
 
 
 async def test_transport_errors_do_not_leak_and_logging_is_restored():
@@ -210,6 +222,16 @@ def test_yaml_failure_stdout_is_allowlisted_and_stderr_has_no_traceback(tmp_path
         "has_login_form",
         "has_account",
         "has_logout",
+        "observed_stage",
+        "get_form_action_class",
+        "get_password_control",
+        "get_username_control",
+        "get_hidden_count_class",
+        "get_challenge_class",
+        "get_content_encoding_class",
+        "get_body_decodable",
+        "final_content_encoding_class",
+        "brotli_decoder_present",
         "error",
     }
     assert secret not in completed.stdout
@@ -323,3 +345,117 @@ def test_close_failure_does_not_print_traceback(monkeypatch, capsys):
 def asyncio_run(module):
     import asyncio
     return asyncio.run(module._run())
+
+
+def _form(action: str, password_type: str = "password", hidden_value: str = "fixture-hidden-secret") -> str:
+    return (
+        "<!DOCTYPE html><html><body>"
+        f"<form action=\"{action}\" method=\"post\">"
+        f"<input type=\"hidden\" name=\"__RequestVerificationToken\" value=\"{hidden_value}\" />"
+        "<input type=\"text\" name=\"Username\" />"
+        f"<input type=\"{password_type}\" name=\"Password\" />"
+        "<input type=\"hidden\" name=\"ReturnUrl\" value=\"fixture-return-secret\" />"
+        "</form></body></html>"
+    )
+
+
+async def _diag_for(html: str, monkeypatch=None) -> tuple[dict, int]:
+    posts = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            posts["n"] += 1
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/html"},
+                content=b"<html><body><p>Account Settings</p><p>Log Out</p></body></html>",
+            )
+        return httpx.Response(200, headers={"Content-Type": "text/html"}, content=html.encode())
+
+    downloader = NCCNDownloader(SECRET_USER, SECRET_PASSWORD)
+    downloader._client = _client(handler)
+    try:
+        diag = await downloader.diagnose_login("https://www.nccn.org/login/Index/")
+    finally:
+        await downloader.close()
+    rendered = json.dumps(diag)
+    for secret in (SECRET_USER, SECRET_PASSWORD, "fixture-hidden-secret", "fixture-return-secret"):
+        assert secret not in rendered
+    return diag, posts["n"]
+
+
+async def test_observed_stage_is_post_only_after_exact_form_submit():
+    posted, posts = await _diag_for(_form("/login/Index/"))
+    assert posts == 1
+    assert posted["observed_stage"] == "post"
+    assert posted["get_form_action_class"] == "exact-relative"
+    assert posted["get_password_control"] == "type-password"
+    assert posted["get_username_control"] == "present"
+    assert posted["get_hidden_count_class"] == "several"
+    assert posted["get_challenge_class"] == "none"
+    assert posted["get_body_decodable"] is True
+    absent, posts = await _diag_for("<html><body><p>no form</p></body></html>")
+    assert posts == 0
+    assert absent["observed_stage"] == "get"
+    assert absent["get_form_action_class"] == "absent"
+
+
+async def test_action_classes_do_not_submit_unless_exact_relative():
+    cases = {
+        "/login/index": "slash-or-case-variant",
+        "https://www.nccn.org/login/Index/": "slash-or-case-variant",
+        "https://www.nccn.org/account/login": "absolute-nccn",
+        "https://evil.example/login": "other",
+    }
+    for action, expected in cases.items():
+        diag, posts = await _diag_for(_form(action))
+        assert posts == 0
+        assert diag["observed_stage"] == "get"
+        assert diag["get_form_action_class"] == expected
+        assert "evil.example" not in json.dumps(diag)
+        assert "account/login" not in json.dumps(diag)
+
+
+async def test_br_without_decoder_does_not_post(monkeypatch):
+    from httpx._decoders import SUPPORTED_DECODERS
+
+    monkeypatch.setattr("nccn_monitor.downloader._brotli_decoder_present", lambda: False)
+    monkeypatch.delitem(SUPPORTED_DECODERS, "br", raising=False)
+    posts = {"n": 0}
+    secret = "fixture-br-secret"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            posts["n"] += 1
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/html", "Content-Encoding": "br"},
+            content=_form("/login/Index/").encode() + secret.encode(),
+        )
+
+    downloader = NCCNDownloader(SECRET_USER, SECRET_PASSWORD)
+    downloader._client = _client(handler)
+    try:
+        diag = await downloader.diagnose_login("https://www.nccn.org/login/Index/")
+    finally:
+        await downloader.close()
+    assert posts["n"] == 0
+    assert diag["observed_stage"] == "get"
+    assert diag["get_content_encoding_class"] == "br"
+    assert diag["final_content_encoding_class"] == "br"
+    assert diag["get_body_decodable"] is False
+    assert diag["brotli_decoder_present"] is False
+    assert diag["get_form_action_class"] == "not-decoded"
+    assert secret not in json.dumps(diag)
+
+
+async def test_challenge_marker_does_not_post_credentials():
+    html = _form("/login/Index/") + "<p>recaptcha fixture-challenge-secret</p>"
+    diag, posts = await _diag_for(html)
+    assert posts == 0
+    assert diag["observed_stage"] == "get"
+    assert diag["get_challenge_class"] == "captcha-marker"
+    assert "fixture-challenge-secret" not in json.dumps(diag)
+    interstitial, posts = await _diag_for("<html><body>Just a moment</body></html>")
+    assert posts == 0
+    assert interstitial["get_challenge_class"] == "interstitial-marker"
