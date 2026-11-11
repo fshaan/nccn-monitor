@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Fixture login wall</title></head>
+<body>
+  <h1>Log in</h1>
+  <p>Synthetic fixture for regression tests. Not an NCCN page and not a credential.</p>
+  <form action="/login/Index/" method="post">
+    <input type="hidden" name="__RequestVerificationToken" value="fixture-token" />
+    <label>Username <input type="text" name="Username" value="" /></label>
+    <label>Password <input type="password" name="Password" value="" /></label>
+    <button type="submit">Log in</button>
+  </form>
+</body>
+</html>
