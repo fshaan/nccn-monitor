@@ -162,5 +162,164 @@ def test_diagnostic_runner_without_config_prints_only_allowlisted_error(tmp_path
     assert payload["error"] == "credentials_not_configured"
     assert SECRET_PASSWORD not in completed.stdout
     assert SECRET_PASSWORD not in completed.stderr
+    assert "Traceback" not in completed.stderr
     assert "http://" not in completed.stdout
     assert "https://" not in completed.stdout
+
+
+def _runner_env(home: Path, pythonpath: str | None = None) -> dict[str, str]:
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not any(part in key.upper() for part in ("NCCN", "PASSWORD", "SECRET", "TOKEN", "COOKIE"))
+    }
+    env["HOME"] = str(home)
+    if pythonpath is not None:
+        env["PYTHONPATH"] = pythonpath
+    else:
+        env.pop("PYTHONPATH", None)
+    return env
+
+
+def test_yaml_failure_stdout_is_allowlisted_and_stderr_has_no_traceback(tmp_path: Path):
+    config_dir = tmp_path / ".nccn_watcher"
+    config_dir.mkdir()
+    secret = "fixture-yaml-secret"
+    (config_dir / "config.yaml").write_text(
+        "nccn:\n  username: fixture-user\n  password: "
+        + secret
+        + "\n  bad: [\n"
+    )
+    runner = Path(__file__).resolve().parents[1] / "scripts" / "diagnose_nccn_login.py"
+    completed = subprocess.run(
+        [sys.executable, str(runner)],
+        cwd=str(tmp_path),
+        env=_runner_env(tmp_path),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 2
+    payload = json.loads(completed.stdout)
+    assert payload["error"] == "request_failed"
+    assert set(payload) <= {
+        "status_code",
+        "host_class",
+        "path_class",
+        "content_type",
+        "has_login_form",
+        "has_account",
+        "has_logout",
+        "error",
+    }
+    assert secret not in completed.stdout
+    assert secret not in completed.stderr
+    assert "Traceback" not in completed.stderr
+    assert "config.yaml" not in completed.stderr
+
+
+def test_runner_loads_script_src_not_pythonpath_dirty_module(tmp_path: Path):
+    dirty = tmp_path / "dirty"
+    package = dirty / "nccn_monitor"
+    package.mkdir(parents=True)
+    marker = tmp_path / "dirty-imported"
+    (package / "__init__.py").write_text("")
+    (package / "downloader.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('dirty')\n"
+        "class NCCNDownloader:\n"
+        "    def __init__(self, username=None, password=None):\n"
+        "        pass\n"
+        "    async def diagnose_login(self, target_url):\n"
+        "        return {'error': 'dirty-loaded'}\n"
+        "    async def close(self):\n"
+        "        pass\n"
+    )
+    isolate = tmp_path / "isolate"
+    repo = Path(__file__).resolve().parents[1]
+    for relative in (
+        "scripts/diagnose_nccn_login.py",
+        "src/nccn_monitor/__init__.py",
+        "src/nccn_monitor/downloader.py",
+    ):
+        target = isolate / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((repo / relative).read_bytes())
+    work = tmp_path / "work"
+    work.mkdir()
+    completed = subprocess.run(
+        [sys.executable, str(isolate / "scripts" / "diagnose_nccn_login.py")],
+        cwd=str(work),
+        env=_runner_env(tmp_path / "home", pythonpath=str(dirty)),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert not marker.exists()
+    assert completed.returncode == 2
+    assert json.loads(completed.stdout)["error"] == "credentials_not_configured"
+    assert "dirty-loaded" not in completed.stdout
+    assert "Traceback" not in completed.stderr
+
+
+def test_runner_does_not_create_state_or_pdf(tmp_path: Path):
+    home = tmp_path / "home"
+    work = tmp_path / "work"
+    home.mkdir()
+    work.mkdir()
+    runner = Path(__file__).resolve().parents[1] / "scripts" / "diagnose_nccn_login.py"
+    before = {path.relative_to(work) for path in work.rglob("*")}
+    completed = subprocess.run(
+        [sys.executable, str(runner)],
+        cwd=str(work),
+        env=_runner_env(home),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 2
+    assert json.loads(completed.stdout)["error"] == "credentials_not_configured"
+    assert not (home / ".nccn-monitor" / "state.json").exists()
+    assert list(work.rglob("*.pdf")) == []
+    assert {path.relative_to(work) for path in work.rglob("*")} == before
+
+
+def test_close_failure_does_not_print_traceback(monkeypatch, capsys):
+    import importlib.util
+
+    runner = Path(__file__).resolve().parents[1] / "scripts" / "diagnose_nccn_login.py"
+    spec = importlib.util.spec_from_file_location("diagnose_nccn_login_under_test", runner)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    secret = "fixture-close-secret"
+    import nccn_monitor.downloader as downloader_module
+
+    class Boom(downloader_module.NCCNDownloader):
+        async def diagnose_login(self, target_url):
+            return {
+                "status_code": 200,
+                "host_class": "nccn",
+                "path_class": "login",
+                "content_type": "text/html",
+                "has_login_form": True,
+                "has_account": False,
+                "has_logout": False,
+            }
+
+        async def close(self):
+            raise RuntimeError(secret + " password: fixture-yaml-secret")
+
+    monkeypatch.setattr(downloader_module, "NCCNDownloader", Boom)
+    monkeypatch.setattr(module, "load_config", lambda config_path="": {"nccn": {"username": "u", "password": "p"}})
+    code = asyncio_run(module)
+    captured = capsys.readouterr()
+    assert code == 0
+    assert secret not in captured.out
+    assert secret not in captured.err
+    assert "Traceback" not in captured.err
+    assert json.loads(captured.out)["path_class"] == "login"
+
+
+def asyncio_run(module):
+    import asyncio
+    return asyncio.run(module._run())
