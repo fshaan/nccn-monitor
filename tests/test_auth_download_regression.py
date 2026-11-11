@@ -25,7 +25,14 @@ import httpx
 import pytest
 from pypdf import PdfReader
 
-from nccn_monitor.downloader import NCCNDownloader, get_archived_versions
+from nccn_monitor.downloader import (
+    ARCHIVE_BLOCKED_INVALID_EXISTING,
+    ARCHIVE_VALID,
+    BLOCKED_EXISTING_PDF_MESSAGE,
+    NCCNDownloader,
+    classify_current_archive,
+    get_archived_versions,
+)
 from nccn_monitor.scraper import (
     GuidelineInfo,
     PdfIndexEntry,
@@ -257,7 +264,7 @@ async def test_existing_login_html_named_as_pdf_is_not_archived_completion(tmp_p
         "1.2026",
         "Gastric Cancer",
         PROFESSIONAL_GASTRIC_URL,
-        OLD_GASTRIC_BYTES,
+        _read_fixture("pdf/professional_gastric_v1_2026.pdf"),
     )
     old_pdf_bytes = old_pdf.read_bytes()
     old_meta_bytes = (old_pdf.parent / "meta.json").read_bytes()
@@ -321,7 +328,7 @@ async def test_non_pdf_occupant_can_be_replaced_by_matching_professional_pdf(tmp
         "1.2026",
         "Gastric Cancer",
         PROFESSIONAL_GASTRIC_URL,
-        OLD_GASTRIC_BYTES,
+        _read_fixture("pdf/professional_gastric_v1_2026.pdf"),
     )
     old_pdf_bytes = old_pdf.read_bytes()
     old_meta_bytes = (old_pdf.parent / "meta.json").read_bytes()
@@ -407,6 +414,225 @@ async def test_compressed_professional_cover_with_patient_crosslink_is_archived(
     assert "Guidelines for Patients" in text
     assert old_pdf.read_bytes() == old_pdf_bytes
     assert (old_pdf.parent / "meta.json").read_bytes() == old_meta_bytes
+
+
+def _occupied_version(archive: Path, payload: bytes) -> Path:
+    return _write_archived_version(
+        archive,
+        "gastric-cancer",
+        "2.2026",
+        "Gastric Cancer",
+        PROFESSIONAL_GASTRIC_URL,
+        payload,
+    )
+
+
+@pytest.mark.parametrize(
+    ("fixture_rel", "payload"),
+    [
+        ("pdf/professional_breast_v2_2026.pdf", None),
+        ("pdf/professional_gastric_v1_2025.pdf", None),
+        ("", b"%PDF-1.4\n%truncated\n"),
+    ],
+)
+async def test_existing_invalid_pdf_is_blocked_and_not_replaced(
+    tmp_path: Path, fixture_rel: str, payload: bytes | None
+):
+    """A %PDF at the target path that is corrupt or the wrong guideline stays put.
+
+    A matching professional response is available and must not be written over it.
+    """
+    archive = tmp_path / "archive"
+    body = payload if payload is not None else _read_fixture(fixture_rel)
+    occupied = _occupied_version(archive, body)
+    original = occupied.read_bytes()
+    requests = []
+
+    def handler(request):
+        requests.append(str(request.url))
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/pdf"},
+            content=_read_fixture("pdf/professional_gastric_v2_2026.pdf"),
+        )
+
+    downloader = NCCNDownloader("fixture-user", "fixture-password")
+    downloader._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        follow_redirects=True,
+    )
+    try:
+        result = await downloader.download_and_archive(
+            PROFESSIONAL_GASTRIC_URL,
+            "gastric-cancer",
+            "2.2026",
+            name="Gastric Cancer",
+            archive_dir=archive,
+        )
+    finally:
+        await downloader.close()
+
+    assert result is None
+    assert requests == []
+    assert occupied.read_bytes() == original
+    assert classify_current_archive(
+        "gastric-cancer", "2.2026", "Gastric Cancer", archive,
+    ) == ARCHIVE_BLOCKED_INVALID_EXISTING
+    listed = [
+        item["version"]
+        for item in get_archived_versions("gastric-cancer", archive_dir=archive)
+    ]
+    assert "2.2026" not in listed
+
+
+async def test_legacy_valid_professional_pdf_stays_completed_and_unchanged(tmp_path: Path):
+    """An existing PDF that already matches name and version is left byte-for-byte."""
+    archive = tmp_path / "archive"
+    payload = _read_fixture("pdf/professional_gastric_v2_2026.pdf")
+    occupied = _occupied_version(archive, payload)
+    original = occupied.read_bytes()
+
+    def handler(request):
+        raise AssertionError(f"valid archive was downloaded again: {request.url}")
+
+    downloader = NCCNDownloader("fixture-user", "fixture-password")
+    downloader._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        follow_redirects=True,
+    )
+    try:
+        result = await downloader.download_and_archive(
+            PROFESSIONAL_GASTRIC_URL,
+            "gastric-cancer",
+            "2.2026",
+            name="Gastric Cancer",
+            archive_dir=archive,
+        )
+    finally:
+        await downloader.close()
+
+    assert result == occupied
+    assert occupied.read_bytes() == original
+    assert classify_current_archive(
+        "gastric-cancer", "2.2026", "Gastric Cancer", archive,
+    ) == ARCHIVE_VALID
+    text = _pdf_text(occupied)
+    assert "Gastric Cancer" in text
+    assert "2.2026" in text
+    assert "Clinical Practice Guidelines in Oncology" in text
+    listed = [
+        item["version"]
+        for item in get_archived_versions("gastric-cancer", archive_dir=archive)
+    ]
+    assert listed == ["2.2026"]
+
+
+async def test_check_updates_reports_blocked_existing_pdf_without_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    home = tmp_path / "home"
+    server = _load_isolated_server(monkeypatch, home)
+    archive = home / "archive"
+    server.config["archive_dir"] = str(archive)
+    server.config["watch_list"] = ["Gastric Cancer"]
+    server.config["analysis"] = {"enabled": True, "update_notes_pages": 5, "language": "zh-CN"}
+    occupied = _occupied_version(archive, _read_fixture("pdf/professional_breast_v2_2026.pdf"))
+    original = occupied.read_bytes()
+    state_path = server.state_mgr.path
+    state_path.write_text(json.dumps({
+        "last_check": "2026-11-11T00:00:00+00:00",
+        "initialized": True,
+        "guidelines": {
+            "Gastric Cancer": {
+                "version": "2.2026",
+                "first_seen": "2026-03-01T00:00:00+00:00",
+                "last_updated": "2026-11-11T00:00:00+00:00",
+            },
+        },
+    }))
+    server.state_mgr = StateManager(state_path)
+    calls: list[dict] = []
+    _install_catalog(
+        monkeypatch,
+        server,
+        {"Gastric Cancer": "2.2026"},
+        calls,
+    )
+
+    report = await server.check_updates()
+
+    assert BLOCKED_EXISTING_PDF_MESSAGE in report
+    assert "No guideline updates detected" not in report
+    assert calls == []
+    assert occupied.read_bytes() == original
+
+
+async def test_login_diagnostic_returns_only_safe_fields(caplog):
+    """The diagnostic observes a mocked exchange and does not echo secrets."""
+    secret_query = "fixture-query-secret"
+    cookie_secret = "fixture-cookie-secret"
+    username = "fixture-user"
+    password = "fixture-password"
+    login_html = """<!DOCTYPE html><html><body>
+      <form action="/login/Index/" method="post">
+        <input type="hidden" name="__RequestVerificationToken" value="fixture-token" />
+        <input type="password" name="Password" />
+        <p>Log in</p>
+      </form></body></html>"""
+    done_html = "<html><body><p>Account Settings</p><p>Log Out</p></body></html>"
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, str(request.url)))
+        if request.method == "GET" and request.url.path != "/home":
+            return httpx.Response(
+                200,
+                headers={
+                    "Content-Type": "text/html; charset=utf-8",
+                    "Set-Cookie": f"session={cookie_secret}",
+                },
+                content=login_html.encode(),
+            )
+        if request.method == "POST":
+            return httpx.Response(
+                302,
+                headers={"Location": f"https://www.nccn.org/home?token={secret_query}"},
+            )
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/html; charset=utf-8"},
+            content=done_html.encode(),
+        )
+
+    downloader = NCCNDownloader(username, password)
+    downloader._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        follow_redirects=True,
+    )
+    try:
+        with caplog.at_level("DEBUG"):
+            diag = await downloader.diagnose_login(
+                f"https://www.nccn.org/professionals/physician_gls/pdf/gastric.pdf?token={secret_query}"
+            )
+    finally:
+        await downloader.close()
+
+    assert diag == {
+        "status_code": 200,
+        "host": "www.nccn.org",
+        "path": "/home",
+        "content_type": "text/html",
+        "has_login_form": False,
+        "has_account": True,
+        "has_logout": True,
+    }
+    rendered = json.dumps(diag)
+    log_text = caplog.text
+    for secret in (secret_query, cookie_secret, username, password, "fixture-token"):
+        assert secret not in rendered
+        assert secret not in log_text
+    assert seen[0][0] == "GET"
+    assert seen[1][0] == "POST"
 
 
 # ── Weekly check retry ───────────────────────────────────────────────

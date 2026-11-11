@@ -8,6 +8,7 @@ import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 from bs4 import BeautifulSoup
@@ -71,9 +72,8 @@ def extract_archive_text(path: Path, max_pages: int = _ARCHIVE_TEXT_PAGES) -> st
 def professional_pdf_matches(path: Path, name: str, version: str) -> bool:
     """Accept a PDF only with professional identity plus the requested name and version.
 
-    Occurrence of the patient-series phrase is not a rejection. Existing files
-    that already start with %PDF are not passed through this check by
-    download_and_archive, so previously stored professional PDFs stay put.
+    Occurrence of the patient-series phrase is not a rejection. The same text
+    checks apply to an existing file and to a newly downloaded one.
     """
     if not file_starts_with_pdf(path) or not name or not version:
         return False
@@ -90,6 +90,55 @@ def professional_pdf_matches(path: Path, name: str, version: str) -> bool:
     )
 
 
+ARCHIVE_VALID = "valid"
+ARCHIVE_MISSING = "missing"
+ARCHIVE_BLOCKED_INVALID_EXISTING = "blocked_invalid_existing"
+ARCHIVE_REPLACEABLE_NON_PDF = "replaceable_non_pdf"
+BLOCKED_EXISTING_PDF_MESSAGE = "blocked-invalid-existing pending manual disposition"
+
+
+def current_archive_file(
+    slug: str,
+    version: str,
+    name: str,
+    archive_dir: str | Path,
+    filename: str = "",
+) -> Path:
+    """Path of the standard file for one recorded version. Older versions are not searched."""
+    from .scraper import format_pdf_filename
+
+    if not filename and name:
+        filename = format_pdf_filename(name, version)
+    elif not filename:
+        filename = "guideline.pdf"
+    return Path(archive_dir).expanduser() / slug / f"v{version}" / filename
+
+
+def classify_current_archive(
+    slug: str,
+    version: str,
+    name: str,
+    archive_dir: str | Path,
+    filename: str = "",
+) -> str:
+    """Classify the recorded version's standard file.
+
+    ``valid`` passes the same professional name/version text check as a new download.
+    ``blocked_invalid_existing`` is an existing ``%PDF`` that fails that check.
+    Callers must not delete or overwrite a blocked file.
+    ``replaceable_non_pdf`` is a non-PDF occupant such as a login page.
+    ``missing`` means there is no non-empty file at the standard path.
+    """
+    path = current_archive_file(slug, version, name, archive_dir, filename)
+    if not path.is_file() or path.stat().st_size <= 0:
+        return ARCHIVE_MISSING
+    if not file_starts_with_pdf(path):
+        return ARCHIVE_REPLACEABLE_NON_PDF
+    if professional_pdf_matches(path, name, version):
+        return ARCHIVE_VALID
+    return ARCHIVE_BLOCKED_INVALID_EXISTING
+
+
 def valid_current_archive_exists(
     slug: str,
     version: str,
@@ -97,19 +146,103 @@ def valid_current_archive_exists(
     archive_dir: str | Path,
     filename: str = "",
 ) -> bool:
-    """Whether this version's standard file is a non-empty PDF.
+    """Whether this recorded version has a matching professional PDF.
 
-    Only the named current version is checked. Older version directories are
-    not scanned, and a non-PDF occupant does not count.
+    Only that current version is checked. A ``%PDF`` header alone is not enough,
+    and older version directories are not scanned.
     """
-    from .scraper import format_pdf_filename
+    return classify_current_archive(slug, version, name, archive_dir, filename) == ARCHIVE_VALID
 
-    if not filename and name:
-        filename = format_pdf_filename(name, version)
-    elif not filename:
-        filename = "guideline.pdf"
-    path = Path(archive_dir).expanduser() / slug / f"v{version}" / filename
-    return path.is_file() and path.stat().st_size > 0 and file_starts_with_pdf(path)
+
+def archive_followups_for_recorded_versions(
+    guidelines,
+    known: dict,
+    watch_list: list[str] | None,
+    archive_dir: str | Path,
+    slug_for_name: dict[str, str] | None = None,
+    skip_names: set[str] | None = None,
+) -> list[dict]:
+    """Recorded monitored versions that are not a valid professional archive.
+
+    This is the shared check a weekly caller can use after ``detect_changes``
+    returns an empty list. It does not change that empty list, and it does not
+    download or modify files. ``blocked_invalid_existing`` items must be left
+    for manual disposition. The external weekly wrapper does not call this yet.
+    """
+    watch_set = {name.lower() for name in watch_list} if watch_list else None
+    skipped = skip_names or set()
+    slug_for_name = slug_for_name or {}
+    followups = []
+    for info in guidelines:
+        if watch_set is not None and info.name.lower() not in watch_set:
+            continue
+        if info.name in skipped:
+            continue
+        recorded = known.get(info.name) or {}
+        version = recorded.get("version") or ""
+        if not version:
+            continue
+        slug = slug_for_name.get(info.name)
+        if not slug:
+            from .scraper import slugify
+            slug = slugify(info.name)
+        status = classify_current_archive(slug, version, info.name, archive_dir)
+        if status == ARCHIVE_VALID:
+            continue
+        followups.append({
+            "name": info.name,
+            "version": version,
+            "slug": slug,
+            "status": status,
+            "detail_url": getattr(info, "detail_url", ""),
+            "category": getattr(info, "category", ""),
+        })
+    return followups
+
+
+def _media_type(content_type: str) -> str:
+    return content_type.split(";", 1)[0].strip().lower()
+
+
+def _diagnostic_flags(text: str) -> dict[str, bool]:
+    """Booleans only. The page text is not returned."""
+    soup = BeautifulSoup(text or "", "html.parser")
+    form = soup.find("form", action=lambda value: isinstance(value, str) and value.lower() == "/login/index/")
+    password = soup.find("input", {"type": "password"})
+    folded = re.sub(r"\s+", " ", text or "").casefold()
+    return {
+        "has_login_form": form is not None or password is not None,
+        "has_account": "account settings" in folded,
+        "has_logout": "log out" in folded or "logout" in folded,
+    }
+
+
+def _diagnostic_view(response) -> dict:
+    """Safe fields from one response. Query, userinfo, body, and headers are omitted."""
+    parts = urlsplit(str(response.url))
+    flags = _diagnostic_flags(response.text)
+    return {
+        "status_code": response.status_code,
+        "host": parts.hostname or "",
+        "path": parts.path or "",
+        "content_type": _media_type(response.headers.get("content-type", "")),
+        "has_login_form": flags["has_login_form"],
+        "has_account": flags["has_account"],
+        "has_logout": flags["has_logout"],
+    }
+
+
+def _empty_diagnostic(error: str) -> dict:
+    return {
+        "error": error,
+        "status_code": None,
+        "host": "",
+        "path": "",
+        "content_type": "",
+        "has_login_form": False,
+        "has_account": False,
+        "has_logout": False,
+    }
 
 
 class NCCNDownloader:
@@ -192,6 +325,58 @@ class NCCNDownloader:
         except Exception as e:
             logger.error("Login error: %s", e)
             return False
+
+    async def diagnose_login(self, target_url: str) -> dict:
+        """Observe one ordinary login attempt and return only safe fields.
+
+        For an authorized local run. This does not decide whether login
+        succeeded, and it does not change ``login()``. The result has the
+        status code, host, path with the query removed, content type, and
+        booleans for a login form, account settings, and log out. Credentials,
+        request bodies, headers, cookies, tokens, raw pages, and full URLs
+        are not logged or returned.
+        """
+        if not self.username or not self.password:
+            logger.error("Cannot diagnose login: no credentials configured")
+            return _empty_diagnostic("credentials_not_configured")
+
+        client = await self._get_client()
+        quiet_loggers = [logging.getLogger(name) for name in ("httpx", "httpcore")]
+        previous_levels = [item.level for item in quiet_loggers]
+        for item in quiet_loggers:
+            item.setLevel(logging.WARNING)
+        try:
+            resp = await client.get(target_url)
+            if resp.status_code != 200:
+                return _diagnostic_view(resp)
+            soup = BeautifulSoup(resp.text, "html.parser")
+            form = soup.find("form", {"action": "/login/Index/"})
+            if not form:
+                return _diagnostic_view(resp)
+            form_data = {}
+            for inp in form.find_all("input", {"type": "hidden"}):
+                name = inp.get("name")
+                if name:
+                    form_data[name] = inp.get("value", "")
+            form_data["Username"] = self.username
+            form_data["Password"] = self.password
+            form_data["RememberMe"] = "false"
+            result = await client.post(
+                "https://www.nccn.org/login/Index/",
+                data=form_data,
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Referer": str(resp.url),
+                    "Origin": "https://www.nccn.org",
+                },
+            )
+            return _diagnostic_view(result)
+        except Exception:
+            logger.error("Login diagnostic request failed")
+            return _empty_diagnostic("request_failed")
+        finally:
+            for item, level in zip(quiet_loggers, previous_levels):
+                item.setLevel(level)
 
     async def download_pdf(
         self,
@@ -282,12 +467,13 @@ class NCCNDownloader:
             filename = "guideline.pdf"
 
         pdf_path = archive_path / filename
-
-        # A real PDF already at this version stays byte-for-byte. HTML or other
-        # non-PDF occupants do not count and may be replaced below.
-        if pdf_path.exists() and pdf_path.stat().st_size > 0 and file_starts_with_pdf(pdf_path):
+        existing = classify_current_archive(slug, version, name, archive_dir, filename)
+        if existing == ARCHIVE_VALID:
             logger.info("Already archived: %s v%s", slug, version)
             return pdf_path
+        if existing == ARCHIVE_BLOCKED_INVALID_EXISTING:
+            logger.error("%s: %s v%s", BLOCKED_EXISTING_PDF_MESSAGE, slug, version)
+            return None
 
         # Download to temp cache first, then move to archive
         temp_dir = Path(archive_dir).expanduser() / ".tmp"
@@ -305,14 +491,17 @@ class NCCNDownloader:
                 downloaded.unlink()
             return None
 
-        # Move to archive with standardized filename. Only a non-PDF occupant
-        # of this exact path is removed; other version directories are untouched.
+        # Only a non-PDF occupant of this exact path may be removed. An existing
+        # %PDF is never deleted or overwritten, even if this download is valid.
         archive_path.mkdir(parents=True, exist_ok=True)
-        if pdf_path.exists():
-            if file_starts_with_pdf(pdf_path):
-                if downloaded.exists() and downloaded.resolve() != pdf_path.resolve():
-                    downloaded.unlink()
+        if pdf_path.exists() and file_starts_with_pdf(pdf_path):
+            if downloaded.exists() and downloaded.resolve() != pdf_path.resolve():
+                downloaded.unlink()
+            if professional_pdf_matches(pdf_path, name, version):
                 return pdf_path
+            logger.error("%s: %s v%s", BLOCKED_EXISTING_PDF_MESSAGE, slug, version)
+            return None
+        if pdf_path.exists():
             pdf_path.unlink()
         shutil.move(str(downloaded), str(pdf_path))
 
@@ -370,6 +559,15 @@ def get_archived_versions(
                 if not pdfs:
                     continue
                 actual_path = pdfs[0]
+            meta_name = meta.get("name") or ""
+            meta_version = meta.get("version") or ""
+            if (
+                file_starts_with_pdf(actual_path)
+                and meta_name
+                and meta_version
+                and not professional_pdf_matches(actual_path, meta_name, meta_version)
+            ):
+                continue
             meta["pdf_path"] = str(actual_path)
             versions.append(meta)
         else:

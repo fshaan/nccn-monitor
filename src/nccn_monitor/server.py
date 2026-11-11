@@ -12,7 +12,15 @@ from .scraper import (
     slugify, ScrapeError,
 )
 from .state import StateManager
-from .downloader import NCCNDownloader, get_archived_versions, valid_current_archive_exists
+from .downloader import (
+    ARCHIVE_BLOCKED_INVALID_EXISTING,
+    ARCHIVE_VALID,
+    BLOCKED_EXISTING_PDF_MESSAGE,
+    NCCNDownloader,
+    archive_followups_for_recorded_versions,
+    classify_current_archive,
+    get_archived_versions,
+)
 from .analyzer import extract_update_notes, build_summary_prompt
 from .health import HealthTracker
 from .guideline_names import search_guidelines, get_zh_name, GUIDELINE_ZH
@@ -72,39 +80,6 @@ downloader = NCCNDownloader(nccn_user or None, nccn_pass or None)
 # ── MCP Tools ────────────────────────────────────────────────────────
 
 
-def _current_versions_missing_archive(
-    current,
-    known: dict,
-    watch_list: list[str],
-    archive_dir: str,
-    pdf_url_map: dict,
-    skip_names: set[str],
-) -> list[tuple]:
-    """Monitored guidelines whose recorded current version has no valid PDF.
-
-    Unmonitored guidelines and older version directories are ignored. This is
-    used by check_updates only. The external weekly wrapper does not call
-    check_updates, so this retry does not by itself repair that script.
-    """
-    watch_set = {name.lower() for name in watch_list} if watch_list else None
-    pending = []
-    for info in current:
-        if watch_set is not None and info.name.lower() not in watch_set:
-            continue
-        if info.name in skip_names:
-            continue
-        recorded = known.get(info.name) or {}
-        version = recorded.get("version") or ""
-        if not version:
-            continue
-        entry = pdf_url_map.get(info.name)
-        slug = entry.slug if entry else slugify(info.name)
-        if valid_current_archive_exists(slug, version, info.name, archive_dir):
-            continue
-        pending.append((info, version))
-    return pending
-
-
 @mcp.tool()
 async def check_updates() -> str:
     """Check NCCN guidelines for updates and return a change report.
@@ -148,31 +123,31 @@ async def check_updates() -> str:
         # Step 3: Get PDF URLs from index (crawls detail pages if needed)
         index = await fetch_pdf_index(current)
         pdf_url_map = {e.name: e for e in index}
-        retries = []
+        followups = []
         if already_initialized:
-            retries = _current_versions_missing_archive(
+            followups = archive_followups_for_recorded_versions(
                 current,
                 state_mgr.known_guidelines,
                 watch_list,
                 archive_dir,
-                pdf_url_map,
-                {change.name for change in changes},
+                slug_for_name={name: entry.slug for name, entry in pdf_url_map.items()},
+                skip_names={change.name for change in changes},
             )
 
-        if not changes and not retries:
+        if not changes and not followups:
             return (
                 f"No guideline updates detected. "
                 f"Checked {len(current)} guidelines. "
                 f"Last check: {state_mgr.last_check}"
             )
 
-        # Step 4: For each version change, and for each already-recorded
-        # monitored version whose valid PDF is still absent, archive once.
+        # Step 4: Download missing or non-PDF occupants. An existing %PDF that
+        # fails the professional check is reported and left untouched.
         report_parts: list[str] = []
         if changes:
             report_parts.append(f"# NCCN Guideline Updates Detected ({len(changes)})\n")
         else:
-            report_parts.append(f"# NCCN Guideline Archives Missing ({len(retries)})\n")
+            report_parts.append(f"# NCCN Guideline Archives Missing ({len(followups)})\n")
 
         jobs = [
             {
@@ -183,20 +158,24 @@ async def check_updates() -> str:
                 "archive_version": change.new_version,
                 "old_version": change.old_version,
                 "new_version": change.new_version,
+                "status": None,
             }
             for change in changes
         ]
         jobs.extend(
             {
-                "name": info.name,
-                "version_line": f"**Version**: {version} (recorded, valid archive missing)",
-                "category": info.category,
-                "detail_url": info.detail_url,
-                "archive_version": version,
-                "old_version": version,
-                "new_version": version,
+                "name": item["name"],
+                "version_line": (
+                    f"**Version**: {item['version']} ({item['status']})"
+                ),
+                "category": item["category"],
+                "detail_url": item["detail_url"],
+                "archive_version": item["version"],
+                "old_version": item["version"],
+                "new_version": item["version"],
+                "status": item["status"],
             }
-            for info, version in retries
+            for item in followups
         )
 
         for job in jobs:
@@ -209,6 +188,19 @@ async def check_updates() -> str:
             ]
             if entry:
                 section.append(f"**PDF**: {entry.pdf_url}")
+            status = job["status"]
+            if status is None and entry:
+                status = classify_current_archive(
+                    entry.slug, job["archive_version"], job["name"], archive_dir,
+                )
+            if status == ARCHIVE_BLOCKED_INVALID_EXISTING:
+                section.append(f"\n*{BLOCKED_EXISTING_PDF_MESSAGE}*")
+                report_parts.append("\n".join(section))
+                continue
+            if status == ARCHIVE_VALID:
+                section.append("\n*Valid professional archive already present.*")
+                report_parts.append("\n".join(section))
+                continue
 
             # Try PDF download + archive + analysis if credentials available
             if analysis_cfg.get("enabled", True) and nccn_user and entry:
